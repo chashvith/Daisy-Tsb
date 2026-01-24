@@ -9,6 +9,7 @@ from threading import Thread
 import asyncio
 import sqlite3
 import aiohttp
+from flask import flask
 token = os.getenv('DISCORD_TOKEN')
 from timeDataBase import setupTimeDB, getUserTime, SaveUserTime, get_leaderboard_data, get_streak_leaderboard # Added get_streak_leaderboard
 from lb_image_gen import draw_leaderboard, draw_streak_leaderboard # Added draw_streak_leaderboard
@@ -845,3 +846,54 @@ async def setup_hook(self):
 
 token = os.getenv('DISCORD_TOKEN')
 bot.run(token)
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot is alive"
+
+def run_web():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
+Thread(target=run_web).start()
+
+# Ensure your existing bot.run is the last line
+token = os.getenv('DISCORD_TOKEN')
+bot.run(token)
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot is alive"
+
+def run_web():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
+Thread(target=run_web).start()
+
+# Ensure your existing bot.run is the last line
+token = os.getenv('DISCORD_TOKEN')
+bot.run(token)
+# --- KEEP-ALIVE SERVER CONFIG ---
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot is alive"
+
+def run_web():
+    # Render provides the PORT variable automatically
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+# We start the web server in a background thread FIRST
+if __name__ == "__main__":
+    t = Thread(target=run_web)
+    t.start()
+
+    # NOW we start the bot. This must be the very last thing that happens.
+    token = os.getenv('DISCORD_TOKEN')
+    if token:
+        bot.run(token)
+    else:
+        print("ERROR: DISCORD_TOKEN not found in Environment Variables!")
