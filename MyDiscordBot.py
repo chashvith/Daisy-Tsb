@@ -9,6 +9,7 @@ from threading import Thread
 import asyncio
 import sqlite3
 import aiohttp
+token = os.getenv('DISCORD_TOKEN')
 from timeDataBase import setupTimeDB, getUserTime, SaveUserTime, get_leaderboard_data, get_streak_leaderboard # Added get_streak_leaderboard
 from lb_image_gen import draw_leaderboard, draw_streak_leaderboard # Added draw_streak_leaderboard
 from repDataBase import setupRepDB, add_rep
