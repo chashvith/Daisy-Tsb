@@ -837,8 +837,7 @@ async def on_ready():
         print(f"Error syncing commands: {e}")
     print("Bot ready!")
     
-with open("token.txt") as file:
-    token = file.read().strip()
+
     
 async def setup_hook(self):
         self.tree.add_command(report_context_menu)
