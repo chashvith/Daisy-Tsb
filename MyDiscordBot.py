@@ -328,7 +328,7 @@ async def exclude_channels(interaction: discord.Interaction, channel: discord.Vo
 @exclude_channels.error
 async def exclude_channels_error(interaction: discord.Interaction, error):
     if isinstance(error, app_commands.MissingPermissions):
-        await interaction.response.send_message("You do not have permission to use this command!", ephemeral=True)
+        await interaction.response.send_message("You do not have permission to use this command, nice try diddy!", ephemeral=False)
 
 @bot.command(aliases=('lb', 'rank'))
 async def leaderboard(ctx, page: int = 1):
