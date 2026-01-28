@@ -329,7 +329,10 @@ async def exclude_channels(interaction: discord.Interaction, channel: discord.Vo
 async def exclude_channels_error(interaction: discord.Interaction, error):
     if isinstance(error, app_commands.MissingPermissions):
         await interaction.response.send_message("You do not have permission to use this command, nice try diddy!", ephemeral=False)
-
+@set_channel.error
+async def set_channels_error(interaction: discord.Interaction, error):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("You do not have permission to use this command, nice try diddy!", ephemeral=True)
 @bot.command(aliases=('lb', 'rank'))
 async def leaderboard(ctx, page: int = 1):
     offset = (page - 1) * 10
