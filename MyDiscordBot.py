@@ -89,8 +89,8 @@ async def report_context_menu(interaction: discord.Interaction, message: discord
     if message.reference and message.reference.resolved:
         original_msg = message.reference.resolved
         embed.add_field(
-            name="Replying To (Tom)", 
-            value=f"{original_msg.author.mention}: \"{original_msg.content}\"\nID: `{original_msg.author.id}`", 
+            name="Replying To", 
+            value=f"{original_msg.author.mention}: \"{original_msg.content[:100]}\"\nID: `{original_msg.author.id}`", 
             inline=False
         )
 
@@ -141,7 +141,7 @@ async def invite_mentions(interaction: discord.Interaction, mentions: str):
     await interaction.followup.send(f"Attempted to notify {len(user_ids)} users. Successfully delivered to {success_count}.", ephemeral=True)
 
 # ==========================================
-#  PROFILE COMMAND
+#  HELPER FUNCTIONS
 # ==========================================
 def level(userID):
     td = timedelta(seconds=int(getUserDailyTime(userID)))
@@ -190,6 +190,23 @@ def get_user_rank(userID, lbtype):
     user_rank = users_ahead + 1
     return user_rank
 
+async def get_leaderboard_users(lbData, bot):
+    users = []
+    for user_id, total_seconds in lbData:
+        user = bot.get_user(user_id)
+        if not user:
+            try:
+                user = await bot.fetch_user(user_id)
+            except discord.NotFound:
+                user = None
+        
+        username = user.name if user else f"Unknown User ({user_id})"
+        users.append((username, total_seconds))
+    return users
+
+# ==========================================
+#  PROFILE COMMAND
+# ==========================================
 @bot.tree.command(name="profile", description="View Your Profile")
 async def Profile(interaction: discord.Interaction):
     userID = interaction.user.id
@@ -200,10 +217,11 @@ async def Profile(interaction: discord.Interaction):
     
     desp = f'''```
 Username    = {interaction.user.name}
-Level = {lvl[0]}
+Level       = {lvl[0]}
 Daily Rank  = {get_user_rank(lbtype="daily", userID=interaction.user.id)}
 Server Rank = {get_user_rank(lbtype="all time", userID=interaction.user.id)}
 ```'''
+    
     profileEmbed = discord.Embed(
         title=f"{interaction.user.name}'s Profile",
         color=discord.Color.red(),
@@ -306,21 +324,7 @@ async def exclude_channels(interaction: discord.Interaction, channel: discord.Te
 @exclude_channels.error
 async def exclude_channels_error(interaction: discord.Interaction, error):
     if isinstance(error, app_commands.MissingPermissions):
-        await interaction.response.send_message("You do not have permission to use this command, nice try diddy!", ephemeral=True)
-
-async def get_leaderboard_users(lbData, bot):
-    users = []
-    for user_id, total_seconds in lbData:
-        user = bot.get_user(user_id)
-        if not user:
-            try:
-                user = await bot.fetch_user(user_id)
-            except discord.NotFound:
-                user = None
-        
-        username = user.name if user else f"Unknown User ({user_id})"
-        users.append((username, total_seconds))
-    return users
+        await interaction.response.send_message("You do not have permission to use this command!", ephemeral=True)
 
 @bot.command(aliases=('lb', 'rank'))
 async def leaderboard(ctx, page: int = 1):
@@ -651,8 +655,12 @@ async def post_daily_streak():
 # ==========================================
 @bot.event
 async def on_message(message):
+    if message.author.bot:
+        return
+        
     msg_content = message.content.lower()
     thank_keywords = ["thanks", "thank you", "thx", "tysm"]
+    
     if any(word in msg_content for word in thank_keywords):
         thanked_user = None
 
@@ -671,7 +679,7 @@ async def on_message(message):
                     thanked_user = user
                     break
                 
-            if not thanked_user:
+            if not thanked_user and message.mentions:
                 thanked_user = message.mentions[0]
 
         if thanked_user:
@@ -704,28 +712,38 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # ==========================================
-#  BOT READY EVENT
+#  BOT READY EVENT - MUST BE AFTER ALL COMMANDS
 # ==========================================
 @bot.event
 async def on_ready():
+    print("🤖 Bot is starting up...")
+    
+    # Setup databases
     setupTimeDB()
     setupTaskDB()
     setupExChannelDB()
     setupRepDB()
     
+    # Start scheduled tasks
     if not midnight_maintenance.is_running():
         midnight_maintenance.start()
+        print("✅ Midnight maintenance task started")
     
     if not post_daily_streak.is_running():
         post_daily_streak.start()
+        print("✅ Daily streak post task started")
 
+    # Add context menu
     bot.tree.add_command(report_menu)
+    
+    # Sync commands
     try:
         synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} command(s)")
+        print(f"✅ Synced {len(synced)} slash command(s)")
     except Exception as e:
-        print(f"Error syncing commands: {e}")
-    print("Bot ready!")
+        print(f"❌ Error syncing commands: {e}")
+    
+    print(f"✅ Bot is ready! Logged in as {bot.user}")
 
 # ==========================================
 #  FLASK WEB SERVER (RENDER KEEP-ALIVE)
@@ -734,24 +752,28 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bot is alive"
+    return "Bot is alive and running!"
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 # ==========================================
 #  MAIN EXECUTION
 # ==========================================
 if __name__ == "__main__":
     # Start Flask in background thread
-    web_thread = Thread(target=run_web)
-    web_thread.daemon = True
+    web_thread = Thread(target=run_web, daemon=True)
     web_thread.start()
+    print("✅ Flask web server started")
 
-    # Start Discord bot
+    # Start Discord bot (THIS MUST BE LAST)
     token = os.getenv('DISCORD_TOKEN')
     if token:
+        print("🚀 Starting Discord bot...")
         bot.run(token)
     else:
-        print("ERROR: DISCORD_TOKEN not found in Environment Variables!")
+        print("❌ ERROR: DISCORD_TOKEN not found in Environment Variables!")
+
+
+#
