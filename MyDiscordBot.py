@@ -321,7 +321,7 @@ async def img_leaderboard(interaction: discord.Interaction, lb_type: app_command
 @bot.tree.command(name="exclude_channel", description="Exclude a channel from tracking (Mods Only)")
 @app_commands.describe(channel="Select the channel to exclude")
 @app_commands.checks.has_permissions(manage_guild=True)
-async def exclude_channels(interaction: discord.Interaction, channel: discord.TextChannel):
+async def exclude_channels(interaction: discord.Interaction, channel: discord.VoiceChannel):
     addChannel(interaction.guild.id, channel.id)
     await interaction.response.send_message(f"{channel.mention} has been added to excluded channels.")
 
