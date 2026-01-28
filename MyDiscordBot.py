@@ -289,21 +289,25 @@ async def img_leaderboard(interaction: discord.Interaction, lb_type: app_command
                 except:
                     user = None
             
-            username = user.display_name if user else "Unknown"
-            
+            if user:
+                username = getattr(user, "display_name", None) or getattr(user, "name", f"Unknown ({user_id})")
+            else:
+                username = f"Unknown ({user_id})"
+
             m, s = divmod(int(seconds), 60)
             h, m = divmod(m, 60)
             time_str = f"{h}h {m}m"
 
             avatar_bytes = None
-            if user and user.avatar:
+            if user:
                 try:
-                    async with session.get(user.avatar.url) as resp:
+                    avatar_url = user.display_avatar.url
+                    async with session.get(avatar_url) as resp:
                         if resp.status == 200:
                             avatar_bytes = await resp.read()
                 except:
                     pass
-            
+
             processed_users.append({
                 'name': username,
                 'time': time_str,
