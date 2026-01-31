@@ -168,6 +168,16 @@ def level(userID):
         return ("Conqueror", 300, study_hours)
     else:
         return ("God", 1000, study_hours)
+def flush_active_voice_time():
+    current_time = datetime.now(timezone.utc)
+
+    for user_id, start_time in voiceTrack.items():
+        duration = (current_time - start_time).total_seconds()
+
+        if duration > 0:
+            SaveUserTime(user_id, duration) 
+            voiceTrack[user_id] = current_time
+    save_voice_sessions(voiceTrack)    
 
 def get_user_rank(userID, lbtype):
     connection = sqlite3.connect('userTimeUsage.db')
