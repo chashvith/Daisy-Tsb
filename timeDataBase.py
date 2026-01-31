@@ -137,3 +137,57 @@ def reset_seasonal_streaks():
     connection.commit()
     connection.close()
     print("Season has been reset. All streaks are now 0.")
+    def get_contextual_data(target_user_id, lb_mode='daily'):
+        connection = sqlite3.connect('userTimeUsage.db')
+        cursor = connection.cursor()
+    
+    # 1. Select data based on mode
+    if lb_mode == 'daily':
+        cursor.execute('SELECT userID, daily_time FROM userTime WHERE daily_time > 0 ORDER BY daily_time DESC')
+    else:
+        cursor.execute('SELECT userID, time FROM userTime WHERE time > 0 ORDER BY time DESC')
+    
+    all_data = cursor.fetchall()
+    connection.close()
+    
+    if not all_data:
+        return [], 0
+
+    # 2. Find target user's index
+    # Create a list of IDs to find index easily
+    user_ids = [row[0] for row in all_data]
+    
+    if target_user_id not in user_ids:
+        # User hasn't studied yet, just return Top 10
+        top_10 = []
+        for i, row in enumerate(all_data[:10]):
+            top_10.append((i + 1, row[0], row[1]))
+        return top_10, 0
+        
+    user_index = user_ids.index(target_user_id)
+    total_users = len(user_ids)
+    
+    # 3. Calculate Indices to Include (Top 3 + Surrounding)
+    indices_to_fetch = set()
+    
+    # Always include Top 3 (Indices 0, 1, 2)
+    for i in range(3):
+        if i < total_users:
+            indices_to_fetch.add(i)
+            
+    # Include 2 Above and 2 Below the user
+    start_slice = max(0, user_index - 2)
+    end_slice = min(total_users, user_index + 3)
+    
+    for i in range(start_slice, end_slice):
+        indices_to_fetch.add(i)
+        
+    # 4. Build Result
+    sorted_indices = sorted(list(indices_to_fetch))
+    result_data = []
+    
+    for idx in sorted_indices:
+        uid, time_val = all_data[idx]
+        result_data.append((idx + 1, uid, time_val))
+        
+    return result_data, user_index + 1

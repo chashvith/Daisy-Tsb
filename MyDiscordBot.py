@@ -14,13 +14,15 @@ from discord.ext import commands, tasks
 from discord import app_commands
 
 # Import your custom modules
-from timeDataBase import (setupTimeDB, getUserTime, SaveUserTime, get_leaderboard_data, 
-                          get_streak_leaderboard, getUserDailyTime, get_streak_info)
+
 from lb_image_gen import draw_leaderboard, draw_streak_leaderboard
 from repDataBase import setupRepDB, add_rep
 from fun_replies import check_humor
 from tasksDataBase import setupTaskDB, getUserData, SaveUserTasks
 from excludedChannels import setupExChannelDB, getExChannel, addChannel
+from timeDataBase import (setupTimeDB, getUserTime, SaveUserTime, get_leaderboard_data, 
+                          get_streak_leaderboard, getUserDailyTime, get_streak_info, 
+                          get_contextual_data)
 
 # Bot setup
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
