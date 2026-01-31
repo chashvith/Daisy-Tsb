@@ -281,7 +281,7 @@ async def on_voice_state_update(member, before, after):
 ])
 async def img_leaderboard(interaction: discord.Interaction, lb_type: app_commands.Choice[str]):
     await interaction.response.defer()
-    
+    flush_active_voice_time()
     lb_mode = lb_type.value
     raw_data = get_leaderboard_data(lb_mode, offset=0)
     
