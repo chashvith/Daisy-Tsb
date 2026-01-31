@@ -137,9 +137,9 @@ def reset_seasonal_streaks():
     connection.commit()
     connection.close()
     print("Season has been reset. All streaks are now 0.")
-    def get_contextual_data(target_user_id, lb_mode='daily'):
-        connection = sqlite3.connect('userTimeUsage.db')
-        cursor = connection.cursor()
+def get_contextual_data(target_user_id, lb_mode='daily'):
+    connection = sqlite3.connect('userTimeUsage.db')
+    cursor = connection.cursor()
     
     # 1. Select data based on mode
     if lb_mode == 'daily':
