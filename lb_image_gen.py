@@ -1,3 +1,4 @@
+from email.mime import base
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import io
 
@@ -173,21 +174,81 @@ def draw_streak_leaderboard(users_data):
         font_name = ImageFont.load_default()
         font_streak = ImageFont.load_default()
 
-    for rank, user in enumerate(users_data, start=1):
-        if rank > 10: break
-        
-        # Get Y coordinate for this rank
-        y = STREAK_Y_COORDS.get(rank)
-        if not y: continue
+    visual_slot = 1
 
-        # 1. Draw Name at (43, Y)
-        draw.text((NAME_X, y), user['name'][:20], font=font_name, fill="#301B42")
+    for user in users_data:
+            if visual_slot > 10: break
+            
+            # This is the real rank (e.g., 1, 2, 3... 50, 51, 52)
+            actual_rank = user['rank']
+            
+            x, y = POSITIONS[visual_slot]
 
-        # 2. Draw Streak at (712, Y)
-        # We assume 712 is the START of the number. 
-        # If you want 712 to be the CENTER of the number, use the centering logic.
-        streak_str = f"{user['streak']} Days"
-        draw.text((STREAK_X, y), streak_str, font=font_streak, fill="#B08D24")
+            # ==========================================
+            # TOP 3 (Visual Slots 1, 2, 3)
+            # ==========================================
+            if visual_slot <= 3:
+                if user['avatar_bytes']:
+                    try:
+                        avatar_img = Image.open(io.BytesIO(user['avatar_bytes']))
+                        avatar_img = circular_avatar(avatar_img, (AVATAR_SIZE_LG, AVATAR_SIZE_LG))
+                        base.paste(avatar_img, (int(x), y), avatar_img)
+                    except: pass
+
+                def get_centered_x(text, font):
+                    text_width = draw.textlength(text, font=font)
+                    return (x + (AVATAR_SIZE_LG / 2)) - (text_width / 2)
+
+                text_y = y + 125
+                
+                name_str = user['name'][:15]
+                draw.text((get_centered_x(name_str, font_name_lg), text_y), 
+                        name_str, font=font_name_lg, fill="white")
+                
+                draw.text((get_centered_x(user['time'], font_time_lg), text_y + 45), 
+                        user['time'], font=font_time_lg, fill="gold")
+
+            # ==========================================
+            # LIST VIEW (Visual Slots 4-10)
+            # ==========================================
+            else:
+                # 1. Avatar
+                avatar_y = y + 10 
+                if user['avatar_bytes']:
+                    try:
+                        avatar_img = Image.open(io.BytesIO(user['avatar_bytes']))
+                        avatar_img = circular_avatar(avatar_img, (AVATAR_SIZE_SM, AVATAR_SIZE_SM))
+                        base.paste(avatar_img, (int(x), avatar_y), avatar_img)
+                    except: pass
+
+                text_y_center = avatar_y + 25
+
+                # 2. ACTUAL RANK NUMBER (e.g., "50.")
+                # This places the rank index strictly to the left of the avatar/name
+                rank_str = f"{actual_rank}."
+                rank_width = draw.textlength(rank_str, font=font_rank_sm)
+                rank_x = x - 20 - rank_width
+                
+                # Highlight user in Gold, others in White
+                rank_color = "gold" if user.get('is_target') else "white"
+                draw.text((rank_x, text_y_center), rank_str, font=font_rank_sm, fill=rank_color)
+
+                # 3. Name
+                name_x = x + AVATAR_SIZE_SM + 20
+                display_name = user['name']
+                
+                # Truncate
+                while draw.textlength(display_name, font=font_name_sm) > (NAME_COLUMN_WIDTH - 10) and len(display_name) > 0:
+                    display_name = display_name[:-1]
+                
+                name_color = "gold" if user.get('is_target') else "white"
+                draw.text((name_x, text_y_center), display_name, font=font_name_sm, fill=name_color)
+
+                # 4. Time
+                time_x = name_x + NAME_COLUMN_WIDTH
+                draw.text((time_x, text_y_center + 2), user['time'], font=font_time_sm, fill="gold")
+
+            visual_slot += 1
 
     buffer = io.BytesIO()
     base.save(buffer, format="PNG")

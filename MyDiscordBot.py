@@ -378,38 +378,65 @@ async def leaderboard(ctx, page: int = 1):
 
     await ctx.send(embed=lbEmbed)
 
-@bot.command(aliases=('dlb', 'daily'))
-async def daily_leaderboard(ctx, page: int = 1):
-    offset = (page - 1) * 10
-    lbData = get_leaderboard_data('daily', offset=offset)
+@bot.tree.command(name="daily_leaderboard", description="Visual Daily Leaderboard (Top 3 + You)")
+async def daily_leaderboard(interaction: discord.Interaction):
+    await interaction.response.defer()
+    
+    flush_active_voice_time()
+    
+    user_id = interaction.user.id
+    
+    # 2. Fetch Contextual Data (Returns tuples: [(Rank, UserID, Time), ...])
+    ranked_data, user_rank = get_contextual_data(user_id, 'daily')
+    
+    if not ranked_data:
+        return await interaction.followup.send("No daily stats recorded yet! Start studying to appear here.")
 
-    if not lbData:
-        return await ctx.send("No data found for this page.")
+    processed_users = []
+    
+    async with aiohttp.ClientSession() as session:
+        for rank, uid, seconds in ranked_data:
+            user = bot.get_user(uid)
+            if not user:
+                try:
+                    user = await bot.fetch_user(uid)
+                except:
+                    user = None
+            
+            if user:
+                username = getattr(user, "display_name", None) or getattr(user, "name", f"Unknown ({uid})")
+            else:
+                username = f"Unknown ({uid})"
 
-    user_list = await get_leaderboard_users(lbData, bot)
+            m, s = divmod(int(seconds), 60)
+            h, m = divmod(m, 60)
+            time_str = f"{h}h {m}m"
 
-    lbEmbed = discord.Embed(
-        title='☀️ Daily Study Leaderboard',
-        color=discord.Color.blue()
-    )
-    if ctx.guild.icon:
-        lbEmbed.set_thumbnail(url=ctx.guild.icon.url)
+            avatar_bytes = None
+            if user:
+                try:
+                    avatar_url = user.display_avatar.url
+                    async with session.get(avatar_url) as resp:
+                        if resp.status == 200:
+                            avatar_bytes = await resp.read()
+                except:
+                    pass
 
-    longest_name = max((len(u[0]) for u in user_list), default=0)
-    start_rank = offset + 1
+            # 4. Append Data with EXPLICIT RANK
+            processed_users.append({
+                'rank': rank,
+                'name': username,
+                'time': time_str,
+                'avatar_bytes': avatar_bytes,
+                'is_target': (uid == user_id) 
+            })
 
-    for rank, (username, total_seconds) in enumerate(user_list, start=start_rank):
-        minutes, seconds = divmod(int(total_seconds), 60)
-        hours, minutes = divmod(minutes, 60)
-        time_str = f"{hours}h {minutes}m {seconds}s"
-        
-        lbEmbed.add_field(
-            name=f"#{rank} - {username.ljust(longest_name)}",
-            value=f"⏱️ {time_str}",
-            inline=False
-        )
-
-    await ctx.send(embed=lbEmbed)
+    final_buffer = await bot.loop.run_in_executor(None, draw_leaderboard, processed_users)
+    
+    file = discord.File(fp=final_buffer, filename="daily_leaderboard.png")
+    
+    msg = f"**Daily Leaderboard** | Your Rank: **#{user_rank}**" if user_rank > 0 else "**Daily Leaderboard**"
+    await interaction.followup.send(content=msg, file=file)
 
 # ==========================================
 #  TASK SYSTEM
