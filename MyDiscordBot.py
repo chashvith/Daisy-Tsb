@@ -441,7 +441,7 @@ async def daily_leaderboard(interaction: discord.Interaction):
 # ==========================================
 #  TASK SYSTEM
 # ==========================================
-@bot.tree.command(name="add_task", description="Add a Journal or Daily task")
+@bot.tree.command(name="add_task", description="add a Journal or Daily task")
 @app_commands.choices(task_type=[
     app_commands.Choice(name="Journal", value="journal"),
     app_commands.Choice(name="Daily", value="daily")
