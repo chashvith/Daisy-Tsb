@@ -545,34 +545,66 @@ async def view_tasks(interaction: discord.Interaction):
 # ==========================================
 @bot.tree.command(name="streak_leaderboard", description="View the Top 10 Active Streaks")
 async def streak_img_lb(interaction: discord.Interaction):
+    # 1. Defer immediately so Discord knows we are working
     await interaction.response.defer()
 
-    raw_data = get_streak_leaderboard()
-    
-    if not raw_data:
-        return await interaction.followup.send("No active streaks found! Start studying to get on the board.")
-
-    processed_users = []
-    
-    for user_id, streak in raw_data:
-        user = bot.get_user(user_id)
-        if not user:
-            try:
-                user = await bot.fetch_user(user_id)
-            except:
-                user = None
+    try:
+        # 2. Fetch Data
+        raw_data = get_streak_leaderboard()
         
-        username = user.display_name if user else "Unknown User"
+        if not raw_data:
+            return await interaction.followup.send("No active streaks found! Start studying to get on the board.")
+
+        processed_users = []
         
-        processed_users.append({
-            'name': username,
-            'streak': str(streak)
-        })
+        # 3. Process Data (Safely)
+        print(f"DEBUG: Processing {len(raw_data)} streak entries...") # Console Log
+        
+        for index, row in enumerate(raw_data):
+            # SAFETY CHECK: Ensure row has enough data
+            if len(row) < 2:
+                print(f"Skipping malformed row: {row}")
+                continue
+                
+            # Access by INDEX instead of unpacking (Fixes 'too many values' error)
+            user_id = row[0]
+            streak_val = row[1]
+            
+            # Fetch User
+            user = bot.get_user(user_id)
+            if not user:
+                try:
+                    user = await bot.fetch_user(user_id)
+                except:
+                    user = None
+            
+            username = user.display_name if user else "Unknown User"
+            
+            processed_users.append({
+                'name': username,
+                'streak': str(streak_val)
+            })
 
-    final_buffer = await bot.loop.run_in_executor(None, draw_streak_leaderboard, processed_users)
-    file = discord.File(fp=final_buffer, filename="streak_leaderboard.png")
-    await interaction.followup.send(file=file)
+        # 4. Generate Image (with specific error catch)
+        try:
+            print("DEBUG: Generating Image...")
+            final_buffer = await bot.loop.run_in_executor(None, draw_streak_leaderboard, processed_users)
+            file = discord.File(fp=final_buffer, filename="streak_leaderboard.png")
+            
+            # 5. Send Success
+            await interaction.followup.send(file=file)
+            print("DEBUG: Sent Streak Leaderboard.")
+            
+        except Exception as img_error:
+            print(f"❌ IMAGE GEN ERROR: {img_error}")
+            import traceback
+            traceback.print_exc()
+            await interaction.followup.send("Error generating the image file. Check console logs.")
 
+    except Exception as e:
+        # Catch any other logic errors (like database connection failing)
+        print(f"❌ CRITICAL ERROR: {e}")
+        await interaction.followup.send(f"An error occurred: {str(e)}")
 # ==========================================
 #  SCHEDULED TASKS
 # ==========================================
