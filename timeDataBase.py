@@ -138,6 +138,10 @@ def reset_seasonal_streaks():
     connection.close()
     print("Season has been reset. All streaks are now 0.")
 def get_contextual_data(target_user_id, lb_mode='daily'):
+    """
+    Fetches Top 3 + 7 Contextual Users (Total 10) to fill the leaderboard.
+    Logic: Show 2 users above target (if possible) and fill the rest below.
+    """
     connection = sqlite3.connect('userTimeUsage.db')
     cursor = connection.cursor()
     
@@ -150,38 +154,58 @@ def get_contextual_data(target_user_id, lb_mode='daily'):
     all_data = cursor.fetchall()
     connection.close()
     
-    if not all_data:
+    total_users = len(all_data)
+    if total_users == 0:
         return [], 0
 
-    # 2. Find target user's index
+    # 2. Find target user's index (0-based)
     # Create a list of IDs to find index easily
     user_ids = [row[0] for row in all_data]
     
-    if target_user_id not in user_ids:
-        # User hasn't studied yet, just return Top 10
-        top_10 = []
-        for i, row in enumerate(all_data[:10]):
-            top_10.append((i + 1, row[0], row[1]))
-        return top_10, 0
-        
-    user_index = user_ids.index(target_user_id)
-    total_users = len(user_ids)
-    
-    # 3. Calculate Indices to Include (Top 3 + Surrounding)
+    target_index = -1
+    if target_user_id in user_ids:
+        target_index = user_ids.index(target_user_id)
+
+    # 3. Determine Indices to Fetch
     indices_to_fetch = set()
     
-    # Always include Top 3 (Indices 0, 1, 2)
-    for i in range(3):
+    # --- A. ALWAYS GET TOP 3 ---
+    for i in range(min(3, total_users)):
+        indices_to_fetch.add(i)
+
+    # --- B. DETERMINE THE LIST VIEW (7 Slots) ---
+    # We have 7 slots to fill (Visual Slots 4-10)
+    slots_available = 7
+    
+    if target_index == -1:
+        # Scenario: User not on board (hasn't studied).
+        # Just fill the remaining 7 slots with Ranks 4-10.
+        start_slice = 3
+    else:
+        # Scenario: User is on the board.
+        # We want to show 2 people ABOVE the user (index - 2).
+        # But we cannot start earlier than index 3 (because 0,1,2 are Top 3).
+        desired_start = target_index - 2
+        start_slice = max(3, desired_start)
+    
+    # --- C. SHIFT WINDOW IF NEAR BOTTOM ---
+    # If starting here means we run out of users before filling 7 slots,
+    # shift the start window UP to fill the empty space.
+    # Example: Total 10 users. User is Rank 10. Start 8. slice 8-15 (Too far).
+    # Correct: Start 3. Slice 3-10.
+    
+    # Calculate the maximum possible start index that ensures we have 'slots_available' items
+    # (or as many as possible if total < 10)
+    max_start = max(3, total_users - slots_available)
+    
+    # Clamp the start_slice
+    start_slice = min(start_slice, max_start)
+    
+    # --- D. ADD INDICES TO SET ---
+    for i in range(start_slice, start_slice + slots_available):
         if i < total_users:
             indices_to_fetch.add(i)
-            
-    # Include 2 Above and 2 Below the user
-    start_slice = max(0, user_index - 2)
-    end_slice = min(total_users, user_index + 3)
-    
-    for i in range(start_slice, end_slice):
-        indices_to_fetch.add(i)
-        
+
     # 4. Build Result
     sorted_indices = sorted(list(indices_to_fetch))
     result_data = []
@@ -190,4 +214,4 @@ def get_contextual_data(target_user_id, lb_mode='daily'):
         uid, time_val = all_data[idx]
         result_data.append((idx + 1, uid, time_val))
         
-    return result_data, user_index + 1
+    return result_data, target_index + 1 if target_index != -1 else 0
