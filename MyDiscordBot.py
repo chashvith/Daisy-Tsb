@@ -302,8 +302,7 @@ class LeaderboardView(discord.ui.View):
 
     @discord.ui.button(label="🔄 Refresh", style=discord.ButtonStyle.primary)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # ✅ Anyone can refresh
-        await interaction.response.defer()
+        await interaction.response.defer(thinking=False)
 
         flush_active_voice_time()
         raw_data = get_leaderboard_data(self.lb_type, offset=0)
@@ -311,29 +310,53 @@ class LeaderboardView(discord.ui.View):
         if not raw_data:
             return await interaction.followup.send("No data available!", ephemeral=True)
 
-        embed = discord.Embed(
-            title=f"🏆 {self.lb_type.title()} Study Leaderboard",
-            color=discord.Color.gold()
+        processed_users = []
+
+        async with aiohttp.ClientSession() as session:
+            for user_id, seconds in raw_data:
+                user = interaction.client.get_user(user_id)
+                if not user:
+                    try:
+                        user = await interaction.client.fetch_user(user_id)
+                    except:
+                        user = None
+
+                if user:
+                    username = getattr(user, "display_name", None) or getattr(user, "name", f"Unknown ({user_id})")
+                else:
+                    username = f"Unknown ({user_id})"
+
+                m, s = divmod(int(seconds), 60)
+                h, m = divmod(m, 60)
+                time_str = f"{h}h {m}m"
+
+                avatar_bytes = None
+                if user:
+                    try:
+                        avatar_url = user.display_avatar.url
+                        async with session.get(avatar_url) as resp:
+                            if resp.status == 200:
+                                avatar_bytes = await resp.read()
+                    except:
+                        pass
+
+                processed_users.append({
+                    'name': username,
+                    'time': time_str,
+                    'avatar_bytes': avatar_bytes
+                })
+
+        final_buffer = await interaction.client.loop.run_in_executor(
+            None, draw_leaderboard, processed_users
         )
 
-        for rank, (user_id, total_seconds) in enumerate(raw_data, start=1):
-            user = interaction.client.get_user(user_id)
-            name = user.display_name if user else f"User {user_id}"
+        file = discord.File(fp=final_buffer, filename="leaderboard.png")
 
-            h, rem = divmod(int(total_seconds), 3600)
-            m, s = divmod(rem, 60)
+        await interaction.message.edit(attachments=[file], view=self)
 
-            embed.add_field(
-                name=f"#{rank} - {name}",
-                value=f"{h}h {m}m",
-                inline=False
-            )
-
-        await interaction.message.edit(embed=embed, view=self)
-
+    # 🔴 DELETE BUTTON MUST BE OUTSIDE REFRESH
     @discord.ui.button(label="🗑 Delete", style=discord.ButtonStyle.danger)
     async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # ❌ Only author can delete
         if interaction.user.id != self.author_id:
             return await interaction.response.send_message(
                 "Only the command author can delete this.",
