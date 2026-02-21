@@ -127,10 +127,10 @@ async def invite_mentions(
     user_ids = list(set(user_ids))
 
     # Build dynamic invite message
-    invite_text = f"{interaction.user.display_name} is waiting for you in <#{interaction.channel_id}> to join them!"
+    invite_text = f"join them in <#{interaction.channel_id}> "
 
     if custom_message:
-        invite_text += f"\n\n💬 **Message from them:** {custom_message}"
+        invite_text += f"\n\n💬 Message from {interaction.user.display_name} :** {custom_message}**"
 
     embed = discord.Embed(
         title="📬 You've been invited!",
@@ -291,7 +291,56 @@ async def on_voice_state_update(member, before, after):
     if is_now_tracking and userID not in voiceTrack:
         voiceTrack[userID] = datetime.now(timezone.utc)
         save_voice_sessions(voiceTrack)
+# ==========================================
+#  LEADERBOARD BUTTON VIEW
+# ==========================================
+class LeaderboardView(discord.ui.View):
+    def __init__(self, author_id, lb_type):
+        super().__init__(timeout=120)
+        self.author_id = author_id
+        self.lb_type = lb_type
 
+    @discord.ui.button(label="🔄 Refresh", style=discord.ButtonStyle.primary)
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # ✅ Anyone can refresh
+        await interaction.response.defer()
+
+        flush_active_voice_time()
+        raw_data = get_leaderboard_data(self.lb_type, offset=0)
+
+        if not raw_data:
+            return await interaction.followup.send("No data available!", ephemeral=True)
+
+        embed = discord.Embed(
+            title=f"🏆 {self.lb_type.title()} Study Leaderboard",
+            color=discord.Color.gold()
+        )
+
+        for rank, (user_id, total_seconds) in enumerate(raw_data, start=1):
+            user = interaction.client.get_user(user_id)
+            name = user.display_name if user else f"User {user_id}"
+
+            h, rem = divmod(int(total_seconds), 3600)
+            m, s = divmod(rem, 60)
+
+            embed.add_field(
+                name=f"#{rank} - {name}",
+                value=f"{h}h {m}m",
+                inline=False
+            )
+
+        await interaction.message.edit(embed=embed, view=self)
+
+    @discord.ui.button(label="🗑 Delete", style=discord.ButtonStyle.danger)
+    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # ❌ Only author can delete
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message(
+                "Only the command author can delete this.",
+                ephemeral=True
+            )
+
+        await interaction.message.delete()
 # ==========================================
 #  LEADERBOARD COMMANDS
 # ==========================================
@@ -347,7 +396,8 @@ async def img_leaderboard(interaction: discord.Interaction, lb_type: app_command
 
     final_buffer = await bot.loop.run_in_executor(None, draw_leaderboard, processed_users)
     file = discord.File(fp=final_buffer, filename="leaderboard.png")
-    await interaction.followup.send(file=file)
+    view = LeaderboardView(interaction.user.id, lb_mode)
+    await interaction.followup.send(file=file, view=view)
 
 @bot.tree.command(name="exclude_channel", description="Exclude a channel from tracking (Mods Only)")
 @app_commands.describe(channel="Select the channel to exclude")
@@ -536,7 +586,50 @@ async def complete(interaction: discord.Interaction):
     
     view = TaskView(user_id, data['journal'], data['daily'])
     await interaction.response.send_message("Select a task to mark it as finished:", view=view, ephemeral=True)
+# ==========================================
+#  TASK BUTTON VIEW
+# ==========================================
+class TaskButtonsView(discord.ui.View):
+    def __init__(self, author_id):
+        super().__init__(timeout=120)
+        self.author_id = author_id
 
+    @discord.ui.button(label="🔄 Refresh", style=discord.ButtonStyle.primary)
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message(
+                "You cannot refresh someone else's task list.",
+                ephemeral=True
+            )
+
+        data = getUserData(self.author_id)
+        info = get_streak_info(self.author_id)
+
+        embed = discord.Embed(
+            title=f"📋 {interaction.user.name}'s Task List",
+            color=discord.Color.blue()
+        )
+
+        status_emoji = "🔥" if info['streak'] > 0 else "❄️"
+        embed.description = f"Current Streak: **{info['streak']} Days** {status_emoji}\nStatus: `{info['status']}`"
+
+        j_list = "\n".join([f"{'✅' if t['completed'] else '❌'} {t['name']}" for t in data['journal']]) or "None"
+        embed.add_field(name="Journal Tasks (Recurring)", value=j_list, inline=False)
+
+        d_list = "\n".join([f"{'✅' if t['completed'] else '❌'} {t['name']}" for t in data['daily']]) or "None"
+        embed.add_field(name="Daily Tasks (Today Only)", value=d_list, inline=False)
+
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="🗑 Delete", style=discord.ButtonStyle.danger)
+    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message(
+                "You cannot delete someone else's task list.",
+                ephemeral=True
+            )
+
+        await interaction.message.delete()
 @bot.tree.command(name="tasks", description="View your current task list and streak status")
 async def view_tasks(interaction: discord.Interaction):
     user_id = interaction.user.id
@@ -557,7 +650,8 @@ async def view_tasks(interaction: discord.Interaction):
     d_list = "\n".join([f"{'✅' if t['completed'] else '❌'} {t['name']}" for t in data['daily']]) or "None"
     embed.add_field(name="Daily Tasks (Today Only)", value=d_list, inline=False)
 
-    await interaction.response.send_message(embed=embed)
+    view = TaskButtonsView(user_id)
+    await interaction.response.send_message(embed=embed, view=view)
 
 # ==========================================
 #  STREAK LEADERBOARD
