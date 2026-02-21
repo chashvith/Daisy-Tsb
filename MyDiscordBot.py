@@ -303,58 +303,105 @@ class LeaderboardView(discord.ui.View):
     @discord.ui.button(label="🔄 Refresh", style=discord.ButtonStyle.primary)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(thinking=False)
-
         flush_active_voice_time()
-        raw_data = get_leaderboard_data(self.lb_type, offset=0)
-
-        if not raw_data:
-            return await interaction.followup.send("No data available!", ephemeral=True)
 
         processed_users = []
 
-        async with aiohttp.ClientSession() as session:
-            for user_id, seconds in raw_data:
-                user = interaction.client.get_user(user_id)
-                if not user:
-                    try:
-                        user = await interaction.client.fetch_user(user_id)
-                    except:
-                        user = None
+        # 🔹 DAILY CONTEXTUAL LEADERBOARD
+        if self.lb_type == "daily":
+            ranked_data, user_rank = get_contextual_data(self.author_id, 'daily')
 
-                if user:
-                    username = getattr(user, "display_name", None) or getattr(user, "name", f"Unknown ({user_id})")
-                else:
-                    username = f"Unknown ({user_id})"
+            if not ranked_data:
+                return await interaction.followup.send("No daily stats recorded yet!", ephemeral=True)
 
-                m, s = divmod(int(seconds), 60)
-                h, m = divmod(m, 60)
-                time_str = f"{h}h {m}m"
+            async with aiohttp.ClientSession() as session:
+                for rank, uid, seconds in ranked_data:
+                    user = interaction.client.get_user(uid)
+                    if not user:
+                        try:
+                            user = await interaction.client.fetch_user(uid)
+                        except:
+                            user = None
 
-                avatar_bytes = None
-                if user:
-                    try:
-                        avatar_url = user.display_avatar.url
-                        async with session.get(avatar_url) as resp:
-                            if resp.status == 200:
-                                avatar_bytes = await resp.read()
-                    except:
-                        pass
+                    username = user.display_name if user else f"Unknown ({uid})"
 
-                processed_users.append({
-                    'name': username,
-                    'time': time_str,
-                    'avatar_bytes': avatar_bytes
-                })
+                    m, s = divmod(int(seconds), 60)
+                    h, m = divmod(m, 60)
+                    time_str = f"{h}h {m}m"
 
-        final_buffer = await interaction.client.loop.run_in_executor(
-            None, draw_leaderboard, processed_users
-        )
+                    avatar_bytes = None
+                    if user:
+                        try:
+                            avatar_url = user.display_avatar.url
+                            async with session.get(avatar_url) as resp:
+                                if resp.status == 200:
+                                    avatar_bytes = await resp.read()
+                        except:
+                            pass
 
-        file = discord.File(fp=final_buffer, filename="leaderboard.png")
+                    processed_users.append({
+                        'rank': rank,
+                        'name': username,
+                        'time': time_str,
+                        'avatar_bytes': avatar_bytes,
+                        'is_target': (uid == self.author_id)
+                    })
 
-        await interaction.message.edit(attachments=[file], view=self)
+            final_buffer = await interaction.client.loop.run_in_executor(
+                None, draw_leaderboard, processed_users
+            )
 
-    # 🔴 DELETE BUTTON MUST BE OUTSIDE REFRESH
+            file = discord.File(fp=final_buffer, filename="daily_leaderboard.png")
+
+            msg = f"**Daily Leaderboard** | Your Rank: **#{user_rank}**"
+            await interaction.message.edit(content=msg, attachments=[file], view=self)
+
+        # 🔹 NORMAL LEADERBOARD
+        else:
+            raw_data = get_leaderboard_data(self.lb_type, offset=0)
+
+            if not raw_data:
+                return await interaction.followup.send("No data available!", ephemeral=True)
+
+            async with aiohttp.ClientSession() as session:
+                for user_id, seconds in raw_data:
+                    user = interaction.client.get_user(user_id)
+                    if not user:
+                        try:
+                            user = await interaction.client.fetch_user(user_id)
+                        except:
+                            user = None
+
+                    username = user.display_name if user else f"Unknown ({user_id})"
+
+                    m, s = divmod(int(seconds), 60)
+                    h, m = divmod(m, 60)
+                    time_str = f"{h}h {m}m"
+
+                    avatar_bytes = None
+                    if user:
+                        try:
+                            avatar_url = user.display_avatar.url
+                            async with session.get(avatar_url) as resp:
+                                if resp.status == 200:
+                                    avatar_bytes = await resp.read()
+                        except:
+                            pass
+
+                    processed_users.append({
+                        'name': username,
+                        'time': time_str,
+                        'avatar_bytes': avatar_bytes
+                    })
+
+            final_buffer = await interaction.client.loop.run_in_executor(
+                None, draw_leaderboard, processed_users
+            )
+
+            file = discord.File(fp=final_buffer, filename="leaderboard.png")
+
+            await interaction.message.edit(attachments=[file], view=self)
+
     @discord.ui.button(label="🗑 Delete", style=discord.ButtonStyle.danger)
     async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.author_id:
@@ -469,7 +516,7 @@ async def leaderboard(ctx, page: int = 1):
         )
 
     await ctx.send(embed=lbEmbed)
-
+#DAILY LEADERBOARD COMMAND
 @bot.tree.command(name="daily_leaderboard", description="Visual Daily Leaderboard (Top 3 + You)")
 async def daily_leaderboard(interaction: discord.Interaction):
     await interaction.response.defer()
@@ -528,7 +575,8 @@ async def daily_leaderboard(interaction: discord.Interaction):
     file = discord.File(fp=final_buffer, filename="daily_leaderboard.png")
     
     msg = f"**Daily Leaderboard** | Your Rank: **#{user_rank}**" if user_rank > 0 else "**Daily Leaderboard**"
-    await interaction.followup.send(content=msg, file=file)
+    view = LeaderboardView(interaction.user.id, "daily")
+    await interaction.followup.send(content=msg, file=file, view=view)
 
 # ==========================================
 #  TASK SYSTEM
@@ -653,28 +701,78 @@ class TaskButtonsView(discord.ui.View):
             )
 
         await interaction.message.delete()
+#task commands        
+# Custom Emoji Mapping
+CUSTOM_EMOJIS = {
+'0': '<:number0:1474683361653162114>',
+    '1': '<:number1:1474683366531137717>',
+    '2': '<:number2:1474683397262807110>',
+    '3': '<:number3:1474683392682627135>',
+    '4': '<:number4:1474683388534198404>',
+    '5': '<:number5:1474683383886909542>',
+    '6': '<:number6:1474683364215885896>',
+    '7': '<:number7:1474683374495862946>',
+    '8': '<:number8:1474683378304417832>',
+    '9': '<:number9:1474683358351982725>',
+    'tick': '<:tick_green:1474680197273096243>',
+    'cross': '<:cross_red:1474680228939829298>'
+}
+
+COMPLETE_CMD = "</complete:1465995376103391290>" 
+ADD_TASK_CMD = "</add_task:1465995376103391289>"
+
+# Helper function to convert integers to your custom digit emojis
+def get_digit_emojis(number: int) -> str:
+    return "".join(CUSTOM_EMOJIS.get(char, char) for char in str(number))
+
 @bot.tree.command(name="tasks", description="View your current task list and streak status")
 async def view_tasks(interaction: discord.Interaction):
     user_id = interaction.user.id
     data = getUserData(user_id)
     info = get_streak_info(user_id)
     
-    embed = discord.Embed(
-        title=f"📋 {interaction.user.name}'s Task List", 
-        color=discord.Color.blue()
+    msg_content = (
+        f"Hello! **{interaction.user.display_name}**!\n\n"
+        "Here are the tasks for the remaining day!\n"
+        f" {COMPLETE_CMD} a task\n"
+        f" {ADD_TASK_CMD} a new task\n\n"
+        " Good Luck! ✨"
     )
+
+    embed = discord.Embed(color=discord.Color.blue())
     
-    status_emoji = "🔥" if info['streak'] > 0 else "❄️"
-    embed.description = f"Current Streak: **{info['streak']} Days** {status_emoji}\nStatus: `{info['status']}`"
+    # Set User Avatar (Fall back to default if they don't have a custom one)
+    avatar_url = interaction.user.avatar.url if interaction.user.avatar else interaction.user.default_avatar.url
+    embed.set_author(name=f"{interaction.user.display_name}'s Task List", icon_url=avatar_url)
+    
+    # Convert streak to custom emojis
+    streak_emojis = get_digit_emojis(info['streak'])
+    
+    # Format Task Lists with Custom Tick/Cross
+    tick = CUSTOM_EMOJIS['tick']
+    cross = CUSTOM_EMOJIS['cross']
+    
+    j_list = "\n".join([f"{tick if t['completed'] else cross} {t['name']}" for t in data['journal']]) or "None"
+    d_list = "\n".join([f"{tick if t['completed'] else cross} {t['name']}" for t in data['daily']]) or "None"
+    
+    # Assemble the new description format
+    embed.description = (
+        f"**Current Streak:** {streak_emojis} days\n\n"
+        f"**Journal Tasks:**\n{j_list}\n\n"
+        f"**Daily Tasks:**\n{d_list}"
+    )
 
-    j_list = "\n".join([f"{'✅' if t['completed'] else '❌'} {t['name']}" for t in data['journal']]) or "None"
-    embed.add_field(name="Journal Tasks (Recurring)", value=j_list, inline=False)
+    # Set Footer with Guild Icon (Safeguard in case it's used in DMs or missing an icon)
+    guild_name = interaction.guild.name if interaction.guild else "our bot"
+    guild_icon = interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None
+    
+    if guild_icon:
+        embed.set_footer(text=f"Thanks for using {guild_name}", icon_url=guild_icon)
+    else:
+        embed.set_footer(text=f"Thanks for using {guild_name}")
 
-    d_list = "\n".join([f"{'✅' if t['completed'] else '❌'} {t['name']}" for t in data['daily']]) or "None"
-    embed.add_field(name="Daily Tasks (Today Only)", value=d_list, inline=False)
-
-    view = TaskButtonsView(user_id)
-    await interaction.response.send_message(embed=embed, view=view)
+    # 3. Send both the content and the embed
+    await interaction.response.send_message(content=msg_content, embed=embed)
 
 # ==========================================
 #  STREAK LEADERBOARD
