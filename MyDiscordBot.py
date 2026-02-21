@@ -773,7 +773,7 @@ async def view_tasks(interaction: discord.Interaction):
 
     # 3. Send both the content and the embed
     view = TaskButtonsView(user_id)
-    await interaction.response.send_message(content=msg_content, embed=embed, ephemeral=True, view=view)
+    await interaction.response.send_message(content=msg_content, embed=embed, view=view)
 
 # ==========================================
 #  STREAK LEADERBOARD
