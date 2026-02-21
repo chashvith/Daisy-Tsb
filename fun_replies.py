@@ -7,6 +7,7 @@ import re
 REACTION_TRIGGERS = {
     # Good Luck
     "good luck": "🍀",
+    "gl": "🍀",
     "all the best": "🤞",
     "best of luck": "🍀",
     "atb": "👍",

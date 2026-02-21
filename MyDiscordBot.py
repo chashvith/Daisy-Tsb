@@ -108,8 +108,15 @@ report_menu = app_commands.ContextMenu(
 #  INVITE SYSTEM
 # ==========================================
 @bot.tree.command(name="invite_members", description="Send DMs to specific users mentioned in the command")
-@app_commands.describe(mentions="Mention the users you want to invite (e.g. @User1 @User2)")
-async def invite_mentions(interaction: discord.Interaction, mentions: str):
+@app_commands.describe(
+    mentions="Mention the users you want to invite (e.g. @User1 @User2)",
+    custom_message="Optional message to include in the invite"
+)
+async def invite_mentions(
+    interaction: discord.Interaction, 
+    mentions: str,
+    custom_message: str = None  
+):
     await interaction.response.defer(ephemeral=True)
 
     user_ids = re.findall(r'<@!?(\d+)>', mentions)
@@ -119,14 +126,23 @@ async def invite_mentions(interaction: discord.Interaction, mentions: str):
 
     user_ids = list(set(user_ids))
 
+    # Build dynamic invite message
+    invite_text = f"{interaction.user.display_name} is waiting for you in <#{interaction.channel_id}> to join them!"
+
+    if custom_message:
+        invite_text += f"\n\n💬 **Message from them:** {custom_message}"
+
     embed = discord.Embed(
         title="📬 You've been invited!",
         description=f"**{interaction.user.display_name}** has sent you an invitation from **{interaction.guild.name}**.",
         color=discord.Color.blue(),
         timestamp=interaction.created_at
     )
-    embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
-    embed.add_field(name="Action", value=f"{interaction.user.display_name} is waiting for you in <#{interaction.channel_id}> to join them!")
+
+    if interaction.guild.icon:
+        embed.set_thumbnail(url=interaction.guild.icon.url)
+
+    embed.add_field(name="Action", value=invite_text)
 
     success_count = 0
     for u_id in user_ids:
@@ -140,7 +156,10 @@ async def invite_mentions(interaction: discord.Interaction, mentions: str):
         except (discord.Forbidden, discord.NotFound, ValueError):
             continue
 
-    await interaction.followup.send(f"Attempted to notify {len(user_ids)} users. Successfully delivered to {success_count}.", ephemeral=True)
+    await interaction.followup.send(
+        f"Attempted to notify {len(user_ids)} users. Successfully delivered to {success_count}.",
+        ephemeral=True
+    )
 
 # ==========================================
 #  HELPER FUNCTIONS
@@ -611,6 +630,7 @@ async def streak_img_lb(interaction: discord.Interaction):
 MAINTENANCE_TIME = time(hour=23, minute=25, tzinfo=timezone.utc)
 STREAK_CHANNEL_ID = 1464650405278515444
 DAILY_TIME = time(hour=23, minute=30, tzinfo=timezone.utc)
+PING_ROLE_ID = 1474670431167451257
 
 @tasks.loop(time=MAINTENANCE_TIME)
 async def midnight_maintenance():
@@ -624,6 +644,11 @@ async def midnight_maintenance():
 
     task_cursor.execute("SELECT userID, tasks FROM userTasks")
     all_users = task_cursor.fetchall()
+    user_tasks_map = {}
+    for userID, tasks_json in all_users:
+        # Keep the row with the longest string (most tasks) to avoid empty duplicates
+        if userID not in user_tasks_map or len(tasks_json) > len(user_tasks_map[userID]):
+            user_tasks_map[userID] = tasks_json
 
     yesterday_str = (datetime.now(timezone.utc) - timedelta(days=1)).strftime('%Y-%m-%d')
 
@@ -643,7 +668,7 @@ async def midnight_maintenance():
             if is_eligible:
                 time_cursor.execute('''
                     UPDATE userTime 
-                    SET current_streak = current_streak + 1, 
+                    SET current_streak = COALESCE(current_streak, 0) + 1,  
                         streak_status = 'ACTIVE',
                         last_completion_date = ?
                     WHERE userID = ?
@@ -723,7 +748,7 @@ async def post_daily_streak():
         final_buffer = await bot.loop.run_in_executor(None, draw_streak_leaderboard, processed_users)
         file = discord.File(fp=final_buffer, filename="daily_streak.png")
 
-        await channel.send("🔥 **Daily Streak Leaderboard** 🔥\nKeep the grind going!", file=file)
+        await channel.send(f"<@&{PING_ROLE_ID}> 🔥 Daily Streak Leaderboard 🔥\nKeep the grind going!", file=file)
         
     except Exception as e:
         print(f"Error generating daily streak: {e}")
