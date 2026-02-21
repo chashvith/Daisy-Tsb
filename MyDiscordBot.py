@@ -704,18 +704,18 @@ class TaskButtonsView(discord.ui.View):
 #task commands        
 # Custom Emoji Mapping
 CUSTOM_EMOJIS = {
-'0': '<:number0:1474683361653162114>',
-    '1': '<:number1:1474683366531137717>',
-    '2': '<:number2:1474683397262807110>',
-    '3': '<:number3:1474683392682627135>',
-    '4': '<:number4:1474683388534198404>',
-    '5': '<:number5:1474683383886909542>',
-    '6': '<:number6:1474683364215885896>',
-    '7': '<:number7:1474683374495862946>',
-    '8': '<:number8:1474683378304417832>',
-    '9': '<:number9:1474683358351982725>',
-    'tick': '<:tick_green:1474680197273096243>',
-    'cross': '<:cross_red:1474680228939829298>'
+    '0': '<a:number0:1474683361653162114>',
+    '1': '<a:number1:1474683366531137717>',
+    '2': '<a:number2:1474683397262807110>',
+    '3': '<a:number3:1474683392682627135>',
+    '4': '<a:number4:1474683388534198404>',
+    '5': '<a:number5:1474683383886909542>',
+    '6': '<a:number6:1474683364215885896>',
+    '7': '<a:number7:1474683374495862946>',
+    '8': '<a:number8:1474683378304417832>',
+    '9': '<a:number9:1474683358351982725>',
+    'tick':'<a:tick_green:1474680197273096243>',
+    'cross':'<a:cross_red:1474680228939829298>'
 }
 
 COMPLETE_CMD = "</complete:1465995376103391290>" 
@@ -732,7 +732,7 @@ async def view_tasks(interaction: discord.Interaction):
     info = get_streak_info(user_id)
     
     msg_content = (
-        f"Hello! **{interaction.user.display_name}**!\n\n"
+        f"Hello **{interaction.user.display_name}**!\n\n"
         "Here are the tasks for the remaining day!\n"
         f" {COMPLETE_CMD} a task\n"
         f" {ADD_TASK_CMD} a new task\n\n"
@@ -772,7 +772,8 @@ async def view_tasks(interaction: discord.Interaction):
         embed.set_footer(text=f"Thanks for using {guild_name}")
 
     # 3. Send both the content and the embed
-    await interaction.response.send_message(content=msg_content, embed=embed)
+    view = TaskButtonsView(user_id)
+    await interaction.response.send_message(content=msg_content, embed=embed, ephemeral=True, view=view)
 
 # ==========================================
 #  STREAK LEADERBOARD
