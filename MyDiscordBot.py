@@ -685,9 +685,10 @@ async def complete(interaction: discord.Interaction):
 #  TASK BUTTON VIEW
 # ==========================================
 class TaskButtonsView(discord.ui.View):
-    def __init__(self, author_id):
+    def __init__(self, author_id, channel_id: int = None):
         super().__init__(timeout=3600)  # increase timeout
         self.author_id = author_id
+        self.channel_id = channel_id
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True
@@ -708,7 +709,7 @@ class TaskButtonsView(discord.ui.View):
         data = getUserData(self.author_id)
         info = get_streak_info(self.author_id)
 
-        embed = build_tasks_embed(interaction.user, data, info)
+        embed = build_tasks_embed(interaction.user, data, info, channel_id=self.channel_id)
 
         await interaction.response.edit_message(embed=embed, view=self)
         
@@ -725,7 +726,7 @@ class TaskButtonsView(discord.ui.View):
 
         await interaction.message.delete()
  
-def build_tasks_embed(user, data, info):
+def build_tasks_embed(user, data, info, channel_id: int = None):
     embed = discord.Embed(color=discord.Color.blue())
 
     embed.set_author(
@@ -734,16 +735,25 @@ def build_tasks_embed(user, data, info):
     )
 
     streak_emojis = get_digit_emojis(info['streak'])
-    tick = CUSTOM_EMOJIS['tick']
+    tick  = CUSTOM_EMOJIS['tick']
     cross = CUSTOM_EMOJIS['cross']
 
     j_list = "\n".join(
         [f"{tick if t['completed'] else cross} {t['name']}" for t in data['journal']]
     ) or "None"
 
-    d_list = "\n".join(
-        [f"{tick if t['completed'] else cross} {t['name']}" for t in data['daily']]
-    ) or "None"
+    # Build daily tasks — slash-command daily tasks first
+    d_lines = [f"{tick if t['completed'] else cross} {t['name']}" for t in data['daily']]
+
+    # Append todo tasks from this channel
+    if channel_id:
+        user_todo = getTodoData(channel_id, user.id)
+        for t in user_todo["pending"]:
+            d_lines.append(f"{cross} `{t['id']}` {t['name']}")
+        for t in user_todo["completed"]:
+            d_lines.append(f"{tick} ~~`{t['id']}` {t['name']}~~")
+
+    d_list = "\n".join(d_lines) or "None"
 
     embed.description = (
         f"**Current Streak:** {streak_emojis} days\n\n"
@@ -751,6 +761,7 @@ def build_tasks_embed(user, data, info):
         f"**Daily Tasks:**\n{d_list}"
     )
 
+    embed.set_footer(text="[-] task to add  •  [x] 001 or [x] task name to complete")
     return embed      
 # Custom Emoji Mapping
 CUSTOM_EMOJIS = {
@@ -789,9 +800,9 @@ async def view_tasks(interaction: discord.Interaction):
         " Good Luck! ✨"
     )
 
-    embed = build_tasks_embed(interaction.user, data, info)
+    embed = build_tasks_embed(interaction.user, data, info, channel_id=interaction.channel.id)
     # 3. Send both the content and the embed
-    view = TaskButtonsView(user_id)
+    view = TaskButtonsView(user_id, channel_id=interaction.channel.id)
     await interaction.response.send_message(content=msg_content, embed=embed, view=view)
     view.message = await interaction.original_response()
 
@@ -1008,38 +1019,6 @@ def _next_todo_id(user_todo: dict) -> str:
             return candidate
         n += 1
 
-def build_todo_embed(user, user_todo: dict) -> discord.Embed:
-    pending   = user_todo["pending"]
-    completed = user_todo["completed"]
-
-    tick  = CUSTOM_EMOJIS["tick"]
-    cross = CUSTOM_EMOJIS["cross"]
-
-    embed = discord.Embed(
-        title=f"📋 {user.display_name}'s To-Do List",
-        color=discord.Color.blue(),
-        timestamp=datetime.now(timezone.utc)
-    )
-    embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
-
-    if pending:
-        embed.add_field(
-            name="Pending",
-            value="\n".join(f"{cross} `{t['id']}` {t['name']}" for t in pending),
-            inline=False
-        )
-    else:
-        embed.add_field(name="Pending", value="*No pending tasks!*", inline=False)
-
-    if completed:
-        embed.add_field(
-            name="Completed",
-            value="\n".join(f"{tick} ~~`{t['id']}` {t['name']}~~" for t in completed),
-            inline=False
-        )
-
-    embed.set_footer(text="[-] task to add  •  [x] 001 or [x] task name to complete")
-    return embed
 
 @bot.tree.command(name="cleartodo", description="Clear your to-do list in this channel")
 @app_commands.describe(what="What to clear")
@@ -1061,9 +1040,10 @@ async def cleartodo(interaction: discord.Interaction, what: app_commands.Choice[
         user_todo["completed"] = []
 
     saveTodoData(interaction.channel.id, interaction.user.id, user_todo)
-    embed = build_todo_embed(interaction.user, user_todo)
-    await interaction.channel.send(embed=embed)
-    await interaction.response.send_message("✅ To-do list cleared!", ephemeral=True)
+    await interaction.response.send_message(
+        "✅ To-do list cleared! Use `/tasks` to see your updated task list.",
+        ephemeral=True
+    )
 
 # ==========================================
 #  MESSAGE HANDLER (REP SYSTEM)
@@ -1168,8 +1148,19 @@ async def on_message(message):
                     user_todo["completed"].append(task)
 
         saveTodoData(message.channel.id, message.author.id, user_todo)
-        embed = build_todo_embed(message.author, user_todo)
-        await message.channel.send(embed=embed)
+
+        # Build confirmation summary
+        parts = []
+        if new_pending:
+            parts.append(f"added **{len(new_pending)}** task(s)")
+        if new_completed:
+            parts.append(f"completed **{len(new_completed)}** task(s)")
+        summary = " & ".join(parts) if parts else "no changes"
+
+        await message.channel.send(
+            f"{message.author.mention} {summary}. Use `/tasks` to see your full list.",
+            delete_after=6
+        )
         return  # skip rep / humor checks for todo messages
     # ---- END TODO LIST PARSING ----
 
