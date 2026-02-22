@@ -1049,7 +1049,17 @@ async def on_message(message):
 
     await check_humor(message)
     await bot.process_commands(message)
+import random
 
+TARGET_USER_ID = 123456789012345678  # your friend (the rage baiter)
+
+@bot.event
+async def on_message(message):
+    if message.author.id ==771262480408248350:
+      
+        await message.channel.send("its okay bro 😭 we understand you're thankful to shi tensai just chill PENGUIN",)
+
+    await bot.process_commands(message)
 # ==========================================
 #  BOT READY EVENT - MUST BE AFTER ALL COMMANDS
 # ==========================================
