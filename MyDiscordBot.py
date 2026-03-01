@@ -20,9 +20,12 @@ from repDataBase import setupRepDB, add_rep
 from fun_replies import check_humor
 from tasksDataBase import setupTaskDB, getUserData, SaveUserTasks
 from excludedChannels import setupExChannelDB, getExChannel, addChannel
-from timeDataBase import (setupTimeDB, getUserTime, SaveUserTime, get_leaderboard_data, 
-                          get_streak_leaderboard, getUserDailyTime, get_streak_info, 
-                          get_contextual_data)
+from tagsDataBase import (setupTagsDB, getUserTags, addUserTag, removeUserTag,
+                          MAX_TAGS, MAX_TAG_LENGTH,
+                          getActiveTag, setActiveTag, clearActiveTag)
+from timeDataBase import (setupTimeDB, getUserTime, SaveUserTime, get_leaderboard_data,
+                          get_streak_leaderboard, getUserDailyTime, get_streak_info,
+                          get_contextual_data, setupTagTimeDB, SaveUserTimeByTag, getUserTagTimes)
 
 # Bot setup
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
@@ -196,9 +199,15 @@ def flush_active_voice_time():
         duration = (current_time - start_time).total_seconds()
 
         if duration > 0:
-            SaveUserTime(user_id, duration) 
+            SaveUserTime(user_id, duration)
+
+            tag = getActiveTag(user_id)
+            if tag:
+                SaveUserTimeByTag(user_id, tag, duration)
+
             voiceTrack[user_id] = current_time
-    save_voice_sessions(voiceTrack)    
+
+    save_voice_sessions(voiceTrack)
 
 def get_user_rank(userID, lbtype):
     connection = sqlite3.connect('userTimeUsage.db')
@@ -258,7 +267,7 @@ Server Rank = {get_user_rank(lbtype="all time", userID=interaction.user.id)}
         color=discord.Color.red(),
         description=desp
     )
-    profileEmbed.set_thumbnail(url=interaction.user.display_avatar.url)
+    profileEmbed.set_thumbnail(url=interaction.user.avatar)
     profileEmbed.add_field(name="XP", value=f"{pAch*solid_square+((10-pAch)*hollow_square)}", inline=False)
     profileEmbed.add_field(name="Today Study Time", value=f"Total Time: {str(timedelta(seconds=int(getUserDailyTime(interaction.user.id))))}", inline=False)
     profileEmbed.add_field(name="Total Study Time", value=f"Total Time: {str(timedelta(seconds=int(getUserTime(interaction.user.id))))}", inline=False)
@@ -269,28 +278,315 @@ Server Rank = {get_user_rank(lbtype="all time", userID=interaction.user.id)}
     await interaction.response.send_message(embed=profileEmbed)
 
 # ==========================================
-#  VOICE TRACKING
+#  VOICE TRACKING  (tag-aware)
 # ==========================================
+
+# Tracks which DM message holds the tag selector so we can clean it up later.
+# { userID: discord.Message }
+_tag_prompt_messages: dict[int, discord.Message] = {}
+
+
+def _flush_user_voice_time(userID: int) -> None:
+    """
+    Commits elapsed voice time to both the global tracker and the active tag
+    tracker, then resets the session start to now (used when switching tags
+    mid-session or during periodic flushes).
+    """
+    if userID not in voiceTrack:
+        return
+    now = datetime.now(timezone.utc)
+    duration = (now - voiceTrack[userID]).total_seconds()
+    if duration <= 0:
+        return
+
+    SaveUserTime(userID, duration)
+
+    tag = getActiveTag(userID)
+    if tag:
+        SaveUserTimeByTag(userID, tag, duration)
+
+    voiceTrack[userID] = now
+    save_voice_sessions(voiceTrack)
+
+
+def _build_tag_prompt_embed(tags: list[str]) -> discord.Embed:
+    """Builds the tag selection embed. Shared between first send and after a tag is added."""
+    if tags:
+        desc = (
+            "Select a subject tag from the dropdown so your study time is tracked correctly.\n"
+            "Don't see your subject? Click **➕ Add Tag** to add one.\n\n"
+            "You can switch anytime with `/switch_tag`."
+        )
+    else:
+        desc = (
+            "You don't have any subject tags yet.\n"
+            "Click **➕ Add Tag** below to add your first one — then select it to start tracking!"
+        )
+    embed = discord.Embed(title="📚 What are you studying?", description=desc, color=discord.Color.blurple())
+    embed.set_footer(text="No selection? Time still counts — just without a subject tag.")
+    return embed
+
+
+async def _send_tag_prompt(member: discord.Member, channel: discord.VoiceChannel) -> None:
+    """Sends the tag-selection embed into the voice channel's built-in text chat."""
+
+    # Delete any previous prompt for this user
+    old_msg = _tag_prompt_messages.pop(member.id, None)
+    if old_msg:
+        try:
+            await old_msg.delete()
+        except Exception:
+            pass
+
+    tags = getUserTags(member.id)
+    view = TagSelectView(member.id, tags)
+    embed = _build_tag_prompt_embed(tags)
+
+    try:
+        msg = await channel.send(content=member.mention, embed=embed, view=view)
+        _tag_prompt_messages[member.id] = msg
+        view.message = msg
+    except discord.Forbidden:
+        pass
+
+
+class AddTagModal(discord.ui.Modal, title="Add a Course Tag"):
+    """Modal that lets a user add a new tag directly from the voice channel prompt."""
+    tag_input = discord.ui.TextInput(
+        label="Subject / Course name",
+        placeholder="e.g. Math, Python, Biology...",
+        min_length=1,
+        max_length=MAX_TAG_LENGTH
+    )
+
+    def __init__(self, user_id: int):
+        super().__init__()
+        self.user_id = user_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        tag = self.tag_input.value.strip()
+        result = addUserTag(self.user_id, tag)
+
+        if result == 'limit':
+            return await interaction.response.send_message(
+                f"❌ You've reached the **{MAX_TAGS} tag limit**. Remove one with `/remove_tag` first.",
+                ephemeral=True
+            )
+        if result == 'duplicate':
+            await interaction.response.send_message(
+                f"⚠️ **`{tag}`** is already in your tags. Select it from the dropdown!",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"✅ **`{tag}`** added! Now select it from the dropdown below.",
+                ephemeral=True
+            )
+
+        # Rebuild the prompt with the updated tag list
+        tags = getUserTags(self.user_id)
+        new_view = TagSelectView(self.user_id, tags)
+        new_embed = _build_tag_prompt_embed(tags)
+
+        old_msg = _tag_prompt_messages.get(self.user_id)
+        if old_msg:
+            try:
+                await old_msg.edit(embed=new_embed, view=new_view)
+                new_view.message = old_msg
+            except Exception:
+                pass
+
+
+class TagSelectView(discord.ui.View):
+    def __init__(self, user_id: int, tags: list[str]):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+        self.message: discord.Message | None = None
+
+        if tags:
+            self.add_item(TagDropdown(user_id, tags))
+
+        self.add_item(AddTagButton(user_id))
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(
+                    content="⏰ Tag selection expired. Use `/switch_tag` anytime to set one.",
+                    view=self
+                )
+            except Exception:
+                pass
+        _tag_prompt_messages.pop(self.user_id, None)
+
+
+class TagDropdown(discord.ui.Select):
+    def __init__(self, user_id: int, tags: list[str]):
+        self.user_id = user_id
+        options = [discord.SelectOption(label=tag, value=tag, emoji="🏷️") for tag in tags]
+        super().__init__(placeholder="Choose your subject tag...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This isn't your session!", ephemeral=True)
+
+        chosen_tag = self.values[0]
+        _flush_user_voice_time(self.user_id)
+        setActiveTag(self.user_id, chosen_tag)
+
+        embed = discord.Embed(
+            description=f"✅ Now tracking under **`{chosen_tag}`**.\nUse `/switch_tag` to change subjects.",
+            color=discord.Color.green()
+        )
+        await interaction.response.edit_message(content=None, embed=embed, view=None)
+        _tag_prompt_messages.pop(self.user_id, None)
+
+
+class AddTagButton(discord.ui.Button):
+    def __init__(self, user_id: int):
+        super().__init__(label="➕ Add Tag", style=discord.ButtonStyle.secondary)
+        self.user_id = user_id
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This isn't your session!", ephemeral=True)
+        await interaction.response.send_modal(AddTagModal(self.user_id))
+
+
 @bot.event
 async def on_voice_state_update(member, before, after):
     userID = member.id
     guild_id = member.guild.id
     exChannels = getExChannel(guild_id)
-    
+
     was_tracking = userID in voiceTrack
     is_now_tracking = (after.channel is not None) and (after.channel.id not in exChannels)
 
+    # ── User left a tracked channel (or moved to an excluded one) ──
     if was_tracking and (not is_now_tracking or (before.channel and before.channel.id != after.channel.id)):
         joinTime = voiceTrack.pop(userID)
         leaveTime = datetime.now(timezone.utc)
         duration = (leaveTime - joinTime).total_seconds()
-        
+
         SaveUserTime(userID, duration)
+
+        tag = getActiveTag(userID)
+        if tag:
+            SaveUserTimeByTag(userID, tag, duration)
+
+        clearActiveTag(userID)
         save_voice_sessions(voiceTrack)
 
+        # Clean up any pending DM prompt
+        old_msg = _tag_prompt_messages.pop(userID, None)
+        if old_msg:
+            try:
+                await old_msg.delete()
+            except Exception:
+                pass
+
+    # ── User joined a tracked channel ──
     if is_now_tracking and userID not in voiceTrack:
         voiceTrack[userID] = datetime.now(timezone.utc)
         save_voice_sessions(voiceTrack)
+        # Send the tag selection prompt via DM
+        await _send_tag_prompt(member, after.channel)
+
+
+# ==========================================
+#  SWITCH TAG COMMAND
+# ==========================================
+@bot.tree.command(name="switch_tag", description="Switch the subject tag your current study session is tracked under")
+async def switch_tag(interaction: discord.Interaction):
+    userID = interaction.user.id
+
+    # Must be in a tracked voice channel
+    if userID not in voiceTrack:
+        return await interaction.response.send_message(
+            "❌ You're not in a study channel right now. Join one first!",
+            ephemeral=True
+        )
+
+    tags = getUserTags(userID)
+    if not tags:
+        return await interaction.response.send_message(
+            "❌ You don't have any tags set up. Use `/add_tag` to add your subjects first.",
+            ephemeral=True
+        )
+
+    current_tag = getActiveTag(userID)
+    current_display = f"`{current_tag}`" if current_tag else "*none*"
+
+    view = SwitchTagView(userID, tags, current_tag)
+
+    embed = discord.Embed(
+        title="🔀 Switch Study Tag",
+        description=(
+            f"**Currently tracking:** {current_display}\n\n"
+            "Select a new subject tag below.\n"
+            "Time already spent under the current tag is saved automatically."
+        ),
+        color=discord.Color.blurple()
+    )
+
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+class SwitchTagView(discord.ui.View):
+    def __init__(self, user_id: int, tags: list[str], current_tag: str | None):
+        super().__init__(timeout=120)
+        self.add_item(SwitchTagDropdown(user_id, tags, current_tag))
+
+
+class SwitchTagDropdown(discord.ui.Select):
+    def __init__(self, user_id: int, tags: list[str], current_tag: str | None):
+        self.user_id = user_id
+        options = []
+        for tag in tags:
+            is_active = (tag == current_tag)
+            options.append(discord.SelectOption(
+                label=tag,
+                value=tag,
+                emoji="✅" if is_active else "🏷️",
+                description="Currently active" if is_active else None
+            ))
+        super().__init__(
+            placeholder="Choose a new subject tag...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message(
+                "This isn't your session!", ephemeral=True
+            )
+
+        chosen_tag = self.values[0]
+        old_tag = getActiveTag(self.user_id)
+
+        if chosen_tag == old_tag:
+            return await interaction.response.edit_message(
+                content=f"ℹ️ You're already studying under **`{chosen_tag}`**.",
+                embed=None, view=None
+            )
+
+        # Flush accumulated time under the OLD tag before switching
+        _flush_user_voice_time(self.user_id)
+
+        setActiveTag(self.user_id, chosen_tag)
+
+        embed = discord.Embed(
+            description=(
+                f"✅ Switched to **`{chosen_tag}`**.\n"
+                + (f"Time under **`{old_tag}`** has been saved." if old_tag else "")
+            ),
+            color=discord.Color.green()
+        )
+        await interaction.response.edit_message(content=None, embed=embed, view=None)
 # ==========================================
 #  LEADERBOARD BUTTON VIEW
 # ==========================================
@@ -688,7 +984,6 @@ class TaskButtonsView(discord.ui.View):
     def __init__(self, author_id):
         super().__init__(timeout=3600)  # increase timeout
         self.author_id = author_id
-        self.message = None
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True
@@ -882,7 +1177,7 @@ async def midnight_maintenance():
     task_cursor.execute("SELECT userID, tasks FROM userTasks")
     all_users = task_cursor.fetchall()
     user_tasks_map = {}
-    for userID, tasks_json in user_tasks_map.items():
+    for userID, tasks_json in all_users:
         # Keep the row with the longest string (most tasks) to avoid empty duplicates
         if userID not in user_tasks_map or len(tasks_json) > len(user_tasks_map[userID]):
             user_tasks_map[userID] = tasks_json
@@ -1052,6 +1347,88 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # ==========================================
+#  TAGS SYSTEM
+# ==========================================
+@bot.tree.command(name="add_tag", description="Add a course tag to your profile")
+@app_commands.describe(tag="The course or subject tag to add (e.g. Math, Python, Biology)")
+async def add_tag(interaction: discord.Interaction, tag: str):
+
+    if len(tag.strip()) > MAX_TAG_LENGTH:
+        return await interaction.response.send_message(
+            f"❌ Tag is too long! Keep it under **{MAX_TAG_LENGTH} characters**.",
+            ephemeral=True
+        )
+
+    if len(tag.strip()) == 0:
+        return await interaction.response.send_message(
+            "❌ Tag cannot be empty.",
+            ephemeral=True
+        )
+
+    result = addUserTag(interaction.user.id, tag)
+
+    if result == 'added':
+        tags = getUserTags(interaction.user.id)
+        tags_display = "  ".join([f"`{t}`" for t in tags])
+
+        embed = discord.Embed(
+            description=f"✅ Added tag **`{tag.strip()}`** to your profile!\n\n**Your Tags:**\n{tags_display}",
+            color=discord.Color.green()
+        )
+        embed.set_footer(text=f"{len(tags)}/{MAX_TAGS} tags used")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    elif result == 'duplicate':
+        await interaction.response.send_message(
+            f"⚠️ You already have the tag **`{tag.strip()}`** on your profile.",
+            ephemeral=True
+        )
+
+    elif result == 'limit':
+        await interaction.response.send_message(
+            f"❌ You've reached the **{MAX_TAGS} tag limit**. Remove a tag first using `/remove_tag`.",
+            ephemeral=True
+        )
+
+
+@bot.tree.command(name="remove_tag", description="Remove a course tag from your profile")
+@app_commands.describe(tag="The tag you want to remove")
+async def remove_tag(interaction: discord.Interaction, tag: str):
+
+    result = removeUserTag(interaction.user.id, tag)
+
+    if result == 'removed':
+        tags = getUserTags(interaction.user.id)
+
+        if tags:
+            tags_display = "  ".join([f"`{t}`" for t in tags])
+            remaining = f"\n\n**Remaining Tags:**\n{tags_display}"
+        else:
+            remaining = "\n\nYou have no tags left. Add one with `/add_tag`."
+
+        embed = discord.Embed(
+            description=f"🗑️ Removed tag **`{tag.strip()}`** from your profile.{remaining}",
+            color=discord.Color.orange()
+        )
+        if tags:
+            embed.set_footer(text=f"{len(tags)}/{MAX_TAGS} tags used")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    elif result == 'not_found':
+        tags = getUserTags(interaction.user.id)
+        tags_display = "  ".join([f"`{t}`" for t in tags]) if tags else "*(none)*"
+        await interaction.response.send_message(
+            f"❌ You don't have a tag called **`{tag.strip()}`**.\n\n**Your current tags:**\n{tags_display}",
+            ephemeral=True
+        )
+
+    elif result == 'empty':
+        await interaction.response.send_message(
+            "❌ You don't have any tags yet. Add one with `/add_tag`.",
+            ephemeral=True
+        )
+
+# ==========================================
 #  BOT READY EVENT - MUST BE AFTER ALL COMMANDS
 # ==========================================
 @bot.event
@@ -1063,6 +1440,8 @@ async def on_ready():
     setupTaskDB()
     setupExChannelDB()
     setupRepDB()
+    setupTagsDB()
+    setupTagTimeDB()
     
     # Start scheduled tasks
     if not midnight_maintenance.is_running():

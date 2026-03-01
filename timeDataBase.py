@@ -215,3 +215,51 @@ def get_contextual_data(target_user_id, lb_mode='daily'):
         result_data.append((idx + 1, uid, time_val))
         
     return result_data, target_index + 1 if target_index != -1 else 0
+# ==========================================
+#  PER-TAG TIME TRACKING
+# ==========================================
+
+def setupTagTimeDB():
+    """Creates the userTagTime table if it doesn't exist."""
+    connection = sqlite3.connect('userTimeUsage.db')
+    cursor = connection.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS userTagTime (
+            userID  INTEGER NOT NULL,
+            tag     TEXT    NOT NULL,
+            time    REAL    DEFAULT 0,
+            PRIMARY KEY (userID, tag)
+        )
+    ''')
+    connection.commit()
+    connection.close()
+
+def SaveUserTimeByTag(userID: int, tag: str, duration: float) -> None:
+    """
+    Adds `duration` seconds to the user's time under `tag`.
+    Upserts the row so callers never need to worry about first-time setup.
+    """
+    connection = sqlite3.connect('userTimeUsage.db')
+    cursor = connection.cursor()
+    cursor.execute('''
+        INSERT INTO userTagTime (userID, tag, time)
+        VALUES (?, ?, ?)
+        ON CONFLICT(userID, tag) DO UPDATE SET time = time + excluded.time
+    ''', (userID, tag, duration))
+    connection.commit()
+    connection.close()
+
+def getUserTagTimes(userID: int) -> list[tuple[str, float]]:
+    """
+    Returns a list of (tag, total_seconds) sorted by time descending
+    for the given user.
+    """
+    connection = sqlite3.connect('userTimeUsage.db')
+    cursor = connection.cursor()
+    cursor.execute(
+        'SELECT tag, time FROM userTagTime WHERE userID = ? ORDER BY time DESC',
+        (userID,)
+    )
+    result = cursor.fetchall()
+    connection.close()
+    return result
