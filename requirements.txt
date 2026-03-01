@@ -1,4 +1,5 @@
 discord.py
 aiohttp
 pillow
-flaskmatplotlib
+flask
+matplotlib
