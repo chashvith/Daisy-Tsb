@@ -111,6 +111,27 @@ report_menu = app_commands.ContextMenu(
 )
 
 # ==========================================
+#  EXCLUDE CHANNELS SYSTEM
+# ==========================================
+
+@bot.tree.command(name="exclude_channel", description="Exclude a voice channel from study tracking (Mods Only)")
+@app_commands.describe(channel="Select the voice channel to exclude")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def exclude_channels(interaction: discord.Interaction, channel: discord.VoiceChannel):
+    addChannel(interaction.guild.id, channel.id)
+    await interaction.response.send_message(f"✅ {channel.mention} has been added to excluded channels.")
+
+@exclude_channels.error
+async def exclude_channels_error(interaction: discord.Interaction, error):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("You do not have permission to use this command, nice try diddy!", ephemeral=False)
+
+@set_channel.error
+async def set_channel_error(interaction: discord.Interaction, error):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("You do not have permission to use this command, nice try diddy!", ephemeral=False)
+
+# ==========================================
 #  INVITE SYSTEM
 # ==========================================
 @bot.tree.command(name="invite_members", description="Send DMs to specific users mentioned in the command")
