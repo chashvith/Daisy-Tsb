@@ -249,6 +249,8 @@ def get_user_rank(userID, lbtype):
             WHERE daily_time > (SELECT daily_time FROM userTime WHERE userID = ?)
         ''', (userID,))
         users_ahead = cursor.fetchone()[0]
+        
+    if users_ahead is None: return None
 
     connection.close()
     user_rank = users_ahead + 1
@@ -297,7 +299,7 @@ Server Rank = {get_user_rank(lbtype="all time", userID=interaction.user.id)}
     profileEmbed.add_field(name="Total Study Time", value=f"Total Time: {str(timedelta(seconds=int(getUserTime(interaction.user.id))))}", inline=False)
     profileEmbed.set_footer(
         text="Thanks for using our server. Keep Studying!",
-        icon_url=interaction.guild.icon
+        icon_url=interaction.guild.icon.url if interaction.guild.icon else None
     )
     await interaction.response.send_message(embed=profileEmbed)
 
@@ -950,6 +952,7 @@ class TaskButtonsView(discord.ui.View):
     def __init__(self, author_id):
         super().__init__(timeout=3600)  # increase timeout
         self.author_id = author_id
+        self.message = None
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True
@@ -1235,7 +1238,7 @@ async def midnight_maintenance():
 
     yesterday_str = (datetime.now(timezone.utc) - timedelta(days=1)).strftime('%Y-%m-%d')
 
-    for userID, tasks_json in all_users:
+    for userID, tasks_json in user_tasks_map.items():
         try:
             data = json.loads(tasks_json)
             journal_tasks = data.get("journal", [])
