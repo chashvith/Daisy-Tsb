@@ -881,7 +881,7 @@ async def midnight_maintenance():
     task_cursor.execute("SELECT userID, tasks FROM userTasks")
     all_users = task_cursor.fetchall()
     user_tasks_map = {}
-    for userID, tasks_json in all_users:
+    for userID, tasks_json in user_tasks_map.items():
         # Keep the row with the longest string (most tasks) to avoid empty duplicates
         if userID not in user_tasks_map or len(tasks_json) > len(user_tasks_map[userID]):
             user_tasks_map[userID] = tasks_json
