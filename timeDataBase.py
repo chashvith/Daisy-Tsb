@@ -331,4 +331,60 @@ def get_last_7_days(userID: int) -> list[tuple[str, float]]:
         d = (datetime.utcnow() - timedelta(days=i)).strftime('%Y-%m-%d')
         result.append((d, rows.get(d, 0.0)))
 
+    return result   # [(YYYY-MM-DD, seconds), ...] oldest → newest
+
+def get_weekly_leaderboard(offset: int = 0) -> list[tuple[int, float]]:
+    """
+    Returns top 10 users ranked by total study seconds over the last 7 days,
+    pulled from the daily history snapshots.
+    Returns [(userID, total_seconds), ...].
+    """
+    connection = sqlite3.connect('userTimeUsage.db')
+    cursor = connection.cursor()
+
+    # Calculate the date 7 days ago
+    from datetime import datetime, timedelta
+    cutoff = (datetime.utcnow() - timedelta(days=7)).strftime('%Y-%m-%d')
+
+    cursor.execute('''
+        SELECT userID, SUM(seconds) as total
+        FROM userDailyHistory
+        WHERE date >= ?
+        GROUP BY userID
+        ORDER BY total DESC
+        LIMIT 10 OFFSET ?
+    ''', (cutoff, offset))
+
+    result = cursor.fetchall()
+    connection.close()
     return result
+
+
+def get_weekly_rank(userID: int) -> int:
+    """Returns the user's rank on the weekly leaderboard (1-based)."""
+    from datetime import datetime, timedelta
+    cutoff = (datetime.utcnow() - timedelta(days=7)).strftime('%Y-%m-%d')
+
+    connection = sqlite3.connect('userTimeUsage.db')
+    cursor = connection.cursor()
+
+    # Get the user's total for the week
+    cursor.execute('''
+        SELECT SUM(seconds) FROM userDailyHistory
+        WHERE userID = ? AND date >= ?
+    ''', (userID, cutoff))
+    result = cursor.fetchone()
+    user_total = result[0] if result and result[0] else 0
+
+    # Count how many users scored higher
+    cursor.execute('''
+        SELECT COUNT(*) FROM (
+            SELECT userID, SUM(seconds) as total
+            FROM userDailyHistory
+            WHERE date >= ?
+            GROUP BY userID
+        ) WHERE total > ?
+    ''', (cutoff, user_total))
+    ahead = cursor.fetchone()[0]
+    connection.close()
+    return ahead + 1

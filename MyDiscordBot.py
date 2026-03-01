@@ -26,7 +26,8 @@ from tagsDataBase import (setupTagsDB, getUserTags, addUserTag, removeUserTag,
 from timeDataBase import (setupTimeDB, getUserTime, SaveUserTime, get_leaderboard_data,
                           get_streak_leaderboard, getUserDailyTime, get_streak_info,
                           get_contextual_data, setupTagTimeDB, SaveUserTimeByTag, getUserTagTimes,
-                          setupDailyHistoryDB, snapshotDailyTime, get_last_7_days)
+                          setupDailyHistoryDB, snapshotDailyTime, get_last_7_days,
+                          get_weekly_leaderboard, get_weekly_rank)
 from daily_report_gen import generate_stats_image
 
 # Bot setup
@@ -590,315 +591,247 @@ class SwitchTagDropdown(discord.ui.Select):
         )
         await interaction.response.edit_message(content=None, embed=embed, view=None)
 # ==========================================
-#  LEADERBOARD BUTTON VIEW
+#  LEADERBOARD  (unified helper + view)
 # ==========================================
+
+AIOHTTP_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://discord.com/"
+}
+
+async def _build_leaderboard_image(bot_ref, lb_type: str, author_id: int):
+    """
+    Fetches + processes leaderboard data for the given lb_type.
+    Returns (file, header_msg) ready to send.
+    lb_type: "daily" | "weekly" | "all time"
+    """
+    flush_active_voice_time()
+    processed_users = []
+
+    async with aiohttp.ClientSession(headers=AIOHTTP_HEADERS) as session:
+
+        # ── DAILY ──────────────────────────────────────────────────────────
+        if lb_type == "daily":
+            ranked_data, user_rank = get_contextual_data(author_id, 'daily')
+            if not ranked_data:
+                return None, None
+
+            for rank, uid, seconds in ranked_data:
+                user = bot_ref.get_user(uid) or await _safe_fetch_user(bot_ref, uid)
+                username = user.display_name if user else f"Unknown ({uid})"
+                avatar_bytes = await _fetch_avatar(session, user)
+                h, m = divmod(int(seconds) // 60, 60)
+                processed_users.append({
+                    'rank': rank, 'name': username,
+                    'time': f"{h}h {m}m", 'avatar_bytes': avatar_bytes,
+                    'is_target': (uid == author_id)
+                })
+
+            header = f"📅 **Daily Leaderboard** | Your Rank: **#{user_rank}**"
+            filename = "daily_leaderboard.png"
+
+        # ── WEEKLY ─────────────────────────────────────────────────────────
+        elif lb_type == "weekly":
+            raw_data = get_weekly_leaderboard(offset=0)
+            if not raw_data:
+                return None, None
+
+            user_rank = get_weekly_rank(author_id)
+
+            for rank, (uid, seconds) in enumerate(raw_data, start=1):
+                user = bot_ref.get_user(uid) or await _safe_fetch_user(bot_ref, uid)
+                username = user.display_name if user else f"Unknown ({uid})"
+                avatar_bytes = await _fetch_avatar(session, user)
+                h, m = divmod(int(seconds) // 60, 60)
+                is_target = (uid == author_id)
+                processed_users.append({
+                    'rank': rank, 'name': username,
+                    'time': f"{h}h {m}m", 'avatar_bytes': avatar_bytes,
+                    'is_target': is_target
+                })
+
+            header = f"📆 **Weekly Leaderboard** | Your Rank: **#{user_rank}**"
+            filename = "weekly_leaderboard.png"
+
+        # ── ALL TIME ───────────────────────────────────────────────────────
+        else:
+            raw_data = get_leaderboard_data('all time', offset=0)
+            if not raw_data:
+                return None, None
+
+            for uid, seconds in raw_data:
+                user = bot_ref.get_user(uid) or await _safe_fetch_user(bot_ref, uid)
+                username = user.display_name if user else f"Unknown ({uid})"
+                avatar_bytes = await _fetch_avatar(session, user)
+                h, m = divmod(int(seconds) // 60, 60)
+                processed_users.append({
+                    'name': username, 'time': f"{h}h {m}m",
+                    'avatar_bytes': avatar_bytes
+                })
+
+            header = "🏆 **All Time Leaderboard**"
+            filename = "alltime_leaderboard.png"
+
+    final_buffer = await bot.loop.run_in_executor(None, draw_leaderboard, processed_users)
+    file = discord.File(fp=final_buffer, filename=filename)
+    return file, header
+
+
+async def _safe_fetch_user(bot_ref, uid):
+    try:
+        return await bot_ref.fetch_user(uid)
+    except Exception:
+        return None
+
+
+async def _fetch_avatar(session, user) -> bytes | None:
+    if not user:
+        return None
+    try:
+        async with session.get(user.display_avatar.url) as resp:
+            if resp.status == 200:
+                return await resp.read()
+    except Exception:
+        pass
+    return None
+
+
 class LeaderboardView(discord.ui.View):
-    def __init__(self, author_id, lb_type):
-        super().__init__(timeout=3600)  # 1 hour
+    """Unified leaderboard view with Daily / Weekly / All Time tab buttons."""
+
+    def __init__(self, author_id: int, lb_type: str):
+        super().__init__(timeout=3600)
         self.author_id = author_id
-        self.lb_type = lb_type
-        self.message = None  # store message reference for timeout handling
+        self.lb_type   = lb_type
+        self.message   = None
+        self._update_buttons()
+
+    def _update_buttons(self):
+        """Re-render buttons so the active tab is highlighted."""
+        self.clear_items()
+
+        styles = {
+            "daily":    discord.ButtonStyle.primary if self.lb_type == "daily"    else discord.ButtonStyle.secondary,
+            "weekly":   discord.ButtonStyle.primary if self.lb_type == "weekly"   else discord.ButtonStyle.secondary,
+            "all time": discord.ButtonStyle.primary if self.lb_type == "all time" else discord.ButtonStyle.secondary,
+        }
+        self.add_item(_TabButton("📅 Daily",    "daily",    styles["daily"]))
+        self.add_item(_TabButton("📆 Weekly",   "weekly",   styles["weekly"]))
+        self.add_item(_TabButton("🏆 All Time", "all time", styles["all time"]))
+        self.add_item(_RefreshButton())
+        self.add_item(_DeleteButton())
+
+    async def switch_to(self, interaction: discord.Interaction, new_type: str):
+        if new_type == self.lb_type:
+            return await interaction.response.defer()
+
+        self.lb_type = new_type
+        self._update_buttons()
+        await self._edit(interaction)
+
+    async def refresh(self, interaction: discord.Interaction):
+        await self._edit(interaction)
+
+    async def _edit(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        file, header = await _build_leaderboard_image(interaction.client, self.lb_type, self.author_id)
+
+        if file is None:
+            return await interaction.followup.send("No data available yet!", ephemeral=True)
+
+        await interaction.message.edit(content=header, attachments=[file], view=self)
 
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True
-
         if self.message:
-            await self.message.edit(view=self)
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
 
-    @discord.ui.button(label="🔄 Refresh", style=discord.ButtonStyle.primary)
-    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(thinking=False)
 
-        flush_active_voice_time()
-        processed_users = []
+class _TabButton(discord.ui.Button):
+    def __init__(self, label: str, lb_type: str, style: discord.ButtonStyle):
+        super().__init__(label=label, style=style)
+        self.lb_type = lb_type
 
-        # ================= DAILY LEADERBOARD =================
-        if self.lb_type == "daily":
-            ranked_data, user_rank = get_contextual_data(self.author_id, 'daily')
+    async def callback(self, interaction: discord.Interaction):
+        await self.view.switch_to(interaction, self.lb_type)
 
-            if not ranked_data:
-                return await interaction.followup.send(
-                    "No daily stats recorded yet!",
-                    ephemeral=True
-                )
 
-            async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36", "Referer": "https://discord.com/"}) as session:
-                for rank, uid, seconds in ranked_data:
-                    user = interaction.client.get_user(uid)
-                    if not user:
-                        try:
-                            user = await interaction.client.fetch_user(uid)
-                        except:
-                            user = None
+class _RefreshButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="🔄 Refresh", style=discord.ButtonStyle.secondary, row=1)
 
-                    username = user.display_name if user else f"Unknown ({uid})"
+    async def callback(self, interaction: discord.Interaction):
+        await self.view.refresh(interaction)
 
-                    m, s = divmod(int(seconds), 60)
-                    h, m = divmod(m, 60)
-                    time_str = f"{h}h {m}m"
 
-                    avatar_bytes = None
-                    if user:
-                        try:
-                            avatar_url = user.display_avatar.url
-                            async with session.get(avatar_url) as resp:
-                                if resp.status == 200:
-                                    avatar_bytes = await resp.read()
-                        except:
-                            pass
+class _DeleteButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="🗑 Delete", style=discord.ButtonStyle.danger, row=1)
 
-                    processed_users.append({
-                        'rank': rank,
-                        'name': username,
-                        'time': time_str,
-                        'avatar_bytes': avatar_bytes,
-                        'is_target': (uid == self.author_id)
-                    })
-
-            final_buffer = await interaction.client.loop.run_in_executor(
-                None, draw_leaderboard, processed_users
-            )
-
-            file = discord.File(fp=final_buffer, filename="daily_leaderboard.png")
-            msg = f"**Daily Leaderboard** | Your Rank: **#{user_rank}**"
-
-            await interaction.message.edit(
-                content=msg,
-                attachments=[file],
-                view=self
-            )
-
-        # ================= ALL TIME LEADERBOARD =================
-        else:
-            raw_data = get_leaderboard_data(self.lb_type, offset=0)
-
-            if not raw_data:
-                return await interaction.followup.send(
-                    "No data available!",
-                    ephemeral=True
-                )
-
-            async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36", "Referer": "https://discord.com/"}) as session:
-                for user_id, seconds in raw_data:
-                    user = interaction.client.get_user(user_id)
-                    if not user:
-                        try:
-                            user = await interaction.client.fetch_user(user_id)
-                        except:
-                            user = None
-
-                    username = user.display_name if user else f"Unknown ({user_id})"
-
-                    m, s = divmod(int(seconds), 60)
-                    h, m = divmod(m, 60)
-                    time_str = f"{h}h {m}m"
-
-                    avatar_bytes = None
-                    if user:
-                        try:
-                            avatar_url = user.display_avatar.url
-                            async with session.get(avatar_url) as resp:
-                                if resp.status == 200:
-                                    avatar_bytes = await resp.read()
-                        except:
-                            pass
-
-                    processed_users.append({
-                        'name': username,
-                        'time': time_str,
-                        'avatar_bytes': avatar_bytes
-                    })
-
-            final_buffer = await interaction.client.loop.run_in_executor(
-                None, draw_leaderboard, processed_users
-            )
-
-            file = discord.File(fp=final_buffer, filename="leaderboard.png")
-
-            await interaction.message.edit(
-                attachments=[file],
-                view=self
-            )
-
-    @discord.ui.button(label="🗑 Delete", style=discord.ButtonStyle.danger)
-    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.author_id:
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.view.author_id:
             return await interaction.response.send_message(
-                "Only the command author can delete this.",
-                ephemeral=True
+                "Only the command author can delete this.", ephemeral=True
             )
-
         await interaction.message.delete()
+
+
 # ==========================================
 #  LEADERBOARD COMMANDS
 # ==========================================
-@bot.tree.command(name="leaderboard", description="View a visual leaderboard")
-@app_commands.choices(lb_type=[
-    app_commands.Choice(name="Daily", value="daily"),
-    app_commands.Choice(name="All Time", value="all time")
+@bot.tree.command(name="leaderboard", description="View the study leaderboard — Daily, Weekly or All Time")
+@app_commands.describe(tab="Which leaderboard to open first (default: Daily)")
+@app_commands.choices(tab=[
+    app_commands.Choice(name="Daily",    value="daily"),
+    app_commands.Choice(name="Weekly",   value="weekly"),
+    app_commands.Choice(name="All Time", value="all time"),
 ])
-async def img_leaderboard(interaction: discord.Interaction, lb_type: app_commands.Choice[str]):
+async def leaderboard(interaction: discord.Interaction, tab: app_commands.Choice[str] = None):
     await interaction.response.defer()
-    flush_active_voice_time()
-    lb_mode = lb_type.value
-    raw_data = get_leaderboard_data(lb_mode, offset=0)
-    
-    if not raw_data:
-        return await interaction.followup.send("No data available yet!")
+    lb_type = tab.value if tab else "daily"
 
-    processed_users = []
-    
-    async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36", "Referer": "https://discord.com/"}) as session:
-        for user_id, seconds in raw_data:
-            user = bot.get_user(user_id)
-            if not user:
-                try:
-                    user = await bot.fetch_user(user_id)
-                except:
-                    user = None
-            
-            if user:
-                username = getattr(user, "display_name", None) or getattr(user, "name", f"Unknown ({user_id})")
-            else:
-                username = f"Unknown ({user_id})"
+    file, header = await _build_leaderboard_image(bot, lb_type, interaction.user.id)
 
-            m, s = divmod(int(seconds), 60)
-            h, m = divmod(m, 60)
-            time_str = f"{h}h {m}m"
+    if file is None:
+        return await interaction.followup.send("No data recorded yet! Start studying to appear here.")
 
-            avatar_bytes = None
-            if user:
-                try:
-                    avatar_url = user.display_avatar.url
-                    async with session.get(avatar_url) as resp:
-                        if resp.status == 200:
-                            avatar_bytes = await resp.read()
-                except:
-                    pass
-
-            processed_users.append({
-                'name': username,
-                'time': time_str,
-                'avatar_bytes': avatar_bytes
-            })
-
-    final_buffer = await bot.loop.run_in_executor(None, draw_leaderboard, processed_users)
-    file = discord.File(fp=final_buffer, filename="leaderboard.png")
-    view = LeaderboardView(interaction.user.id, lb_mode)
-    msg=await interaction.followup.send(file=file, view=view)
+    view = LeaderboardView(interaction.user.id, lb_type)
+    msg = await interaction.followup.send(content=header, file=file, view=view)
     view.message = msg
-    
 
-@bot.tree.command(name="exclude_channel", description="Exclude a channel from tracking (Mods Only)")
-@app_commands.describe(channel="Select the channel to exclude")
-@app_commands.checks.has_permissions(manage_guild=True)
-async def exclude_channels(interaction: discord.Interaction, channel: discord.VoiceChannel):
-    addChannel(interaction.guild.id, channel.id)
-    await interaction.response.send_message(f"{channel.mention} has been added to excluded channels.")
 
-@exclude_channels.error
-async def exclude_channels_error(interaction: discord.Interaction, error):
-    if isinstance(error, app_commands.MissingPermissions):
-        await interaction.response.send_message("You do not have permission to use this command, nice try diddy!", ephemeral=False)
-@set_channel.error
-async def set_channel_error(interaction: discord.Interaction, error):
-    if isinstance(error, app_commands.MissingPermissions):
-        await interaction.response.send_message("You do not have permission to use this command, nice try diddy!", ephemeral=False)
 @bot.command(aliases=('lb', 'rank'))
-async def leaderboard(ctx, page: int = 1):
+async def lb_text(ctx, page: int = 1):
+    """Prefix command fallback — plain text all-time leaderboard."""
     offset = (page - 1) * 10
     lbData = get_leaderboard_data('all time', offset=offset)
-    
+
     if not lbData:
         return await ctx.send("No data found for this page.")
 
     user_list = await get_leaderboard_users(lbData, bot)
 
-    lbEmbed = discord.Embed(
-        title='🏆 All Time Study Leaderboard',
-        color=discord.Color.gold()
-    )
+    lbEmbed = discord.Embed(title='🏆 All Time Study Leaderboard', color=discord.Color.gold())
     if ctx.guild.icon:
         lbEmbed.set_thumbnail(url=ctx.guild.icon.url)
 
     longest_name = max((len(u[0]) for u in user_list), default=0)
     start_rank = offset + 1
-    
+
     for rank, (username, total_seconds) in enumerate(user_list, start=start_rank):
         minutes, seconds = divmod(int(total_seconds), 60)
         hours, minutes = divmod(minutes, 60)
-        time_str = f"{hours}h {minutes}m {seconds}s"
-        
         lbEmbed.add_field(
             name=f"#{rank} - {username.ljust(longest_name)}",
-            value=f"⏱️ {time_str}",
+            value=f"⏱️ {hours}h {minutes}m {seconds}s",
             inline=False
         )
 
     await ctx.send(embed=lbEmbed)
-#DAILY LEADERBOARD COMMAND
-@bot.tree.command(name="daily_leaderboard", description="Visual Daily Leaderboard (Top 3 + You)")
-async def daily_leaderboard(interaction: discord.Interaction):
-    await interaction.response.defer()
-    
-    flush_active_voice_time()
-    
-    user_id = interaction.user.id
-    
-    # 2. Fetch Contextual Data (Returns tuples: [(Rank, UserID, Time), ...])
-    ranked_data, user_rank = get_contextual_data(user_id, 'daily')
-    
-    if not ranked_data:
-        return await interaction.followup.send("No daily stats recorded yet! Start studying to appear here.")
-
-    processed_users = []
-    
-    async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36", "Referer": "https://discord.com/"}) as session:
-        for rank, uid, seconds in ranked_data:
-            user = bot.get_user(uid)
-            if not user:
-                try:
-                    user = await bot.fetch_user(uid)
-                except:
-                    user = None
-            
-            if user:
-                username = getattr(user, "display_name", None) or getattr(user, "name", f"Unknown ({uid})")
-            else:
-                username = f"Unknown ({uid})"
-
-            m, s = divmod(int(seconds), 60)
-            h, m = divmod(m, 60)
-            time_str = f"{h}h {m}m"
-
-            avatar_bytes = None
-            if user:
-                try:
-                    avatar_url = user.display_avatar.url
-                    async with session.get(avatar_url) as resp:
-                        if resp.status == 200:
-                            avatar_bytes = await resp.read()
-                except:
-                    pass
-
-            # 4. Append Data with EXPLICIT RANK
-            processed_users.append({
-                'rank': rank,
-                'name': username,
-                'time': time_str,
-                'avatar_bytes': avatar_bytes,
-                'is_target': (uid == user_id) 
-            })
-
-    final_buffer = await bot.loop.run_in_executor(None, draw_leaderboard, processed_users)
-    
-    file = discord.File(fp=final_buffer, filename="daily_leaderboard.png")
-    
-    msg = f"**Daily Leaderboard** | Your Rank: **#{user_rank}**" if user_rank > 0 else "**Daily Leaderboard**"
-    view = LeaderboardView(interaction.user.id, "daily")
-    msg=await interaction.followup.send(content=msg, file=file, view=view)
-    view.message = msg
 
 # ==========================================
 #  TASK SYSTEM
