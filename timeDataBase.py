@@ -1,8 +1,15 @@
 import sqlite3
 import json
 
+def _get_conn():
+    """WAL-mode connection — concurrent reads never block writes."""
+    conn = sqlite3.connect('userTimeUsage.db', timeout=30, check_same_thread=False)
+    conn.execute('PRAGMA journal_mode=WAL')
+    return conn
+
+
 def setupTimeDB():
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
 
     cursor = connection.cursor()
     
@@ -37,7 +44,7 @@ def setupTimeDB():
     connection.close()
 
 def getUserTime(userID):
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
     cursor = connection.cursor()
     cursor.execute('SELECT time FROM userTime WHERE userID = ?', (userID,))
     result = cursor.fetchone()
@@ -49,7 +56,7 @@ def getUserTime(userID):
         return result[0]
     
 def getUserDailyTime(userID):
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
     cursor = connection.cursor()
     cursor.execute('SELECT daily_time FROM userTime WHERE userID = ?', (userID,))
     result = cursor.fetchone()
@@ -62,7 +69,7 @@ def getUserDailyTime(userID):
 
 
 def SaveUserTime(userID, duration):
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
     cursor = connection.cursor()
 
     # 1. Update (or Insert) TOTAL Time
@@ -82,7 +89,7 @@ def SaveUserTime(userID, duration):
 
 def get_leaderboard_data(lbtype,offset=0):
     """Fetches 10 users from the database, starting after the offset."""
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
     cursor = connection.cursor()
     
     # The '?' is a placeholder for the offset value
@@ -97,7 +104,7 @@ def get_leaderboard_data(lbtype,offset=0):
     return result
 
 def get_streak_info(userID):
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
     cursor = connection.cursor()
     cursor.execute('SELECT current_streak, streak_status, last_completion_date FROM userTime WHERE userID = ?', (userID,))
     result = cursor.fetchone()
@@ -108,7 +115,7 @@ def get_streak_info(userID):
     return {"streak": 0, "status": 'INACTIVE', "last_date": None}
 
 def get_streak_leaderboard():
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
     cursor = connection.cursor()
     # Filter for active streaks and sort by the highest number
     cursor.execute('''
@@ -122,7 +129,7 @@ def get_streak_leaderboard():
     return result
 
 def reset_seasonal_streaks():
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
     cursor = connection.cursor()
     
     # 1. Reset all streaks to 0
@@ -142,7 +149,7 @@ def get_contextual_data(target_user_id, lb_mode='daily'):
     Fetches Top 3 + 7 Contextual Users (Total 10) to fill the leaderboard.
     Logic: Show 2 users above target (if possible) and fill the rest below.
     """
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
     cursor = connection.cursor()
     
     # 1. Select data based on mode
@@ -221,7 +228,7 @@ def get_contextual_data(target_user_id, lb_mode='daily'):
 
 def setupTagTimeDB():
     """Creates the userTagTime table if it doesn't exist."""
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
     cursor = connection.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS userTagTime (
@@ -239,7 +246,7 @@ def SaveUserTimeByTag(userID: int, tag: str, duration: float) -> None:
     Adds `duration` seconds to the user's time under `tag`.
     Upserts the row so callers never need to worry about first-time setup.
     """
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
     cursor = connection.cursor()
     cursor.execute('''
         INSERT INTO userTagTime (userID, tag, time)
@@ -254,7 +261,7 @@ def getUserTagTimes(userID: int) -> list[tuple[str, float]]:
     Returns a list of (tag, total_seconds) sorted by time descending
     for the given user.
     """
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
     cursor = connection.cursor()
     cursor.execute(
         'SELECT tag, time FROM userTagTime WHERE userID = ? ORDER BY time DESC',
@@ -270,7 +277,7 @@ def getUserTagTimes(userID: int) -> list[tuple[str, float]]:
 
 def setupDailyHistoryDB():
     """Creates userDailyHistory table — one row per user per date."""
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
     cursor = connection.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS userDailyHistory (
@@ -289,7 +296,7 @@ def snapshotDailyTime(userID: int) -> None:
     Called at end-of-day (before the daily_time reset).
     Records today's daily_time into the history table.
     """
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
     cursor = connection.cursor()
 
     cursor.execute('SELECT daily_time FROM userTime WHERE userID = ?', (userID,))
@@ -313,7 +320,7 @@ def get_last_7_days(userID: int) -> list[tuple[str, float]]:
     Returns the last 7 days of history for a user as [(date_str, seconds), ...],
     oldest first. Missing days are filled with 0 so the bar chart always has 7 bars.
     """
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
     cursor = connection.cursor()
 
     # Pull up to 7 rows, most recent first
@@ -341,7 +348,7 @@ def get_weekly_leaderboard(offset: int = 0) -> list[tuple[int, float]]:
     Returns [(userID, total_seconds), ...].
     """
     from datetime import datetime, timedelta
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
     cursor = connection.cursor()
 
     today = datetime.utcnow().strftime('%Y-%m-%d')
@@ -378,7 +385,7 @@ def get_weekly_rank(userID: int) -> int:
     today  = datetime.utcnow().strftime('%Y-%m-%d')
     cutoff = (datetime.utcnow() - timedelta(days=7)).strftime('%Y-%m-%d')
 
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = _get_conn()
     cursor = connection.cursor()
 
     # User's own weekly total (past days + today)
