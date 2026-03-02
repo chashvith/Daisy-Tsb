@@ -1161,7 +1161,7 @@ async def send_daily_reports(user_ids: list[int]) -> None:
                            f"{int(daily_secs // 60)}m"
 
             # ── Generate stats image in executor ─────────────────────────
-            stats_buffer = await asyncio.to_thread(generate_stats_image, tag_times, history)
+            stats_buffer = generate_stats_image(tag_times, history)
 
             # ── Fetch user avatar ─────────────────────────────────────────
             avatar_url = user.display_avatar.url
@@ -1516,7 +1516,7 @@ async def remove_tag(interaction: discord.Interaction, tag: str):
 
 ## TEST
 
-@bot.tree.command(name="test_report", description="DEV ONLY: Preview your nightly DM report")
+@bot.tree.command(name="test_report", description="Aurous ONLY: Preview your nightly DM report")
 async def test_report(interaction: discord.Interaction):
     if interaction.user.id != 617279634915983390:
         return await interaction.response.send_message("Too bad, you're not Aurous :(", ephemeral=True)
