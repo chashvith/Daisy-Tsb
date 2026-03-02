@@ -13,10 +13,10 @@ import math
 from datetime import datetime, timedelta
 
 import matplotlib
-matplotlib.use("Agg")          # headless — no display needed
-import matplotlib.pyplot as plt
+matplotlib.use("Agg")
+from matplotlib.figure import Figure          # OOP only — no pyplot globals, thread-safe
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 import matplotlib.patches as mpatches
-from matplotlib.patches import FancyBboxPatch
 import matplotlib.ticker as ticker
 
 # ── Colour palette (Discord dark theme friendly) ──────────────────────────────
@@ -71,7 +71,8 @@ def generate_stats_image(
     Both arguments may be empty/zeroed — the chart degrades gracefully.
     """
 
-    fig = plt.Figure(figsize=(FIG_W, FIG_H), dpi=DPI, facecolor=BG_COLOR)
+    fig = Figure(figsize=(FIG_W, FIG_H), facecolor=BG_COLOR)
+    FigureCanvasAgg(fig)  # attach a non-interactive canvas — required for savefig without pyplot
 
     # Two equal columns
     ax_pie = fig.add_axes([0.03, 0.08, 0.42, 0.84])   # left
@@ -133,7 +134,7 @@ def generate_stats_image(
         )
 
         # Donut effect
-        centre_circle = plt.Circle((0, 0), 0.55, color=CARD_COLOR)
+        centre_circle = mpatches.Circle((0, 0), 0.55, color=CARD_COLOR)
         ax_pie.add_artist(centre_circle)
 
         # Legend below the pie
@@ -207,6 +208,6 @@ def generate_stats_image(
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight",
                 facecolor=BG_COLOR, dpi=DPI)
-    plt.close(fig)
+    # No plt.close() needed — Figure is not registered with pyplot's global state
     buf.seek(0)
     return buf
