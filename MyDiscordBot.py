@@ -1523,6 +1523,16 @@ async def test_report(interaction: discord.Interaction):
 
     await interaction.response.defer(ephemeral=True)
     print("🧪 test_report: deferred")
+    
+    try:
+        from timeDataBase import setupTimeDB, setupTagTimeDB, setupDailyHistoryDB
+        setupTimeDB()
+        setupTagTimeDB()
+        setupDailyHistoryDB()
+        print("🧪 tables ensured")
+    except Exception as e:
+        print(f"❌ Setup failed: {e}")
+        return await interaction.followup.send(f"Setup error: {e}", ephemeral=True)
 
     userID = interaction.user.id
     user   = interaction.user
