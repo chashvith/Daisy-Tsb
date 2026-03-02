@@ -625,11 +625,10 @@ AIOHTTP_HEADERS = {
 async def _build_leaderboard_image(bot_ref, lb_type: str, author_id: int):
     """
     Fetches + processes leaderboard data for the given lb_type.
-    Returns (file, header_msg) ready to send.
+    All avatars fetched concurrently — no sequential HTTP bottleneck.
     lb_type: "daily" | "weekly" | "all time"
     """
     flush_active_voice_time()
-    processed_users = []
 
     async with aiohttp.ClientSession(headers=AIOHTTP_HEADERS) as session:
 
@@ -639,18 +638,23 @@ async def _build_leaderboard_image(bot_ref, lb_type: str, author_id: int):
             if not ranked_data:
                 return None, None
 
-            for rank, uid, seconds in ranked_data:
-                user = bot_ref.get_user(uid) or await _safe_fetch_user(bot_ref, uid)
-                username = user.display_name if user else f"Unknown ({uid})"
-                avatar_bytes = await _fetch_avatar(session, user)
+            users = {uid: (bot_ref.get_user(uid) or await _safe_fetch_user(bot_ref, uid))
+                     for _, uid, _ in ranked_data}
+            avatar_results = await asyncio.gather(
+                *[_fetch_avatar(session, users[uid]) for _, uid, _ in ranked_data],
+                return_exceptions=True
+            )
+            processed_users = []
+            for (rank, uid, seconds), av in zip(ranked_data, avatar_results):
                 h, m = divmod(int(seconds) // 60, 60)
                 processed_users.append({
-                    'rank': rank, 'name': username,
-                    'time': f"{h}h {m}m", 'avatar_bytes': avatar_bytes,
+                    'rank': rank,
+                    'name': users[uid].display_name if users[uid] else f"Unknown ({uid})",
+                    'time': f"{h}h {m}m",
+                    'avatar_bytes': av if isinstance(av, bytes) else None,
                     'is_target': (uid == author_id)
                 })
-
-            header = f"📅 **Daily Leaderboard** | Your Rank: **#{user_rank}**"
+            header   = f"📅 **Daily Leaderboard** | Your Rank: **#{user_rank}**"
             filename = "daily_leaderboard.png"
 
         # ── WEEKLY ─────────────────────────────────────────────────────────
@@ -660,20 +664,23 @@ async def _build_leaderboard_image(bot_ref, lb_type: str, author_id: int):
                 return None, None
 
             user_rank = get_weekly_rank(author_id)
-
-            for rank, (uid, seconds) in enumerate(raw_data, start=1):
-                user = bot_ref.get_user(uid) or await _safe_fetch_user(bot_ref, uid)
-                username = user.display_name if user else f"Unknown ({uid})"
-                avatar_bytes = await _fetch_avatar(session, user)
+            users = {uid: (bot_ref.get_user(uid) or await _safe_fetch_user(bot_ref, uid))
+                     for uid, _ in raw_data}
+            avatar_results = await asyncio.gather(
+                *[_fetch_avatar(session, users[uid]) for uid, _ in raw_data],
+                return_exceptions=True
+            )
+            processed_users = []
+            for rank, ((uid, seconds), av) in enumerate(zip(raw_data, avatar_results), start=1):
                 h, m = divmod(int(seconds) // 60, 60)
-                is_target = (uid == author_id)
                 processed_users.append({
-                    'rank': rank, 'name': username,
-                    'time': f"{h}h {m}m", 'avatar_bytes': avatar_bytes,
-                    'is_target': is_target
+                    'rank': rank,
+                    'name': users[uid].display_name if users[uid] else f"Unknown ({uid})",
+                    'time': f"{h}h {m}m",
+                    'avatar_bytes': av if isinstance(av, bytes) else None,
+                    'is_target': (uid == author_id)
                 })
-
-            header = f"📆 **Weekly Leaderboard** | Your Rank: **#{user_rank}**"
+            header   = f"📆 **Weekly Leaderboard** | Your Rank: **#{user_rank}**"
             filename = "weekly_leaderboard.png"
 
         # ── ALL TIME ───────────────────────────────────────────────────────
@@ -682,20 +689,24 @@ async def _build_leaderboard_image(bot_ref, lb_type: str, author_id: int):
             if not raw_data:
                 return None, None
 
-            for uid, seconds in raw_data:
-                user = bot_ref.get_user(uid) or await _safe_fetch_user(bot_ref, uid)
-                username = user.display_name if user else f"Unknown ({uid})"
-                avatar_bytes = await _fetch_avatar(session, user)
+            users = {uid: (bot_ref.get_user(uid) or await _safe_fetch_user(bot_ref, uid))
+                     for uid, _ in raw_data}
+            avatar_results = await asyncio.gather(
+                *[_fetch_avatar(session, users[uid]) for uid, _ in raw_data],
+                return_exceptions=True
+            )
+            processed_users = []
+            for (uid, seconds), av in zip(raw_data, avatar_results):
                 h, m = divmod(int(seconds) // 60, 60)
                 processed_users.append({
-                    'name': username, 'time': f"{h}h {m}m",
-                    'avatar_bytes': avatar_bytes
+                    'name': users[uid].display_name if users[uid] else f"Unknown ({uid})",
+                    'time': f"{h}h {m}m",
+                    'avatar_bytes': av if isinstance(av, bytes) else None,
                 })
-
-            header = "🏆 **All Time Leaderboard**"
+            header   = "🏆 **All Time Leaderboard**"
             filename = "alltime_leaderboard.png"
 
-    final_buffer = await bot.loop.run_in_executor(None, draw_leaderboard, processed_users)
+    final_buffer = await asyncio.to_thread(draw_leaderboard, processed_users)
     file = discord.File(fp=final_buffer, filename=filename)
     return file, header
 
