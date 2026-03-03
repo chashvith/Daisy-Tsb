@@ -154,7 +154,7 @@ async def invite_mentions(
     user_ids = list(set(user_ids))
 
     # Build dynamic invite message
-    invite_text = f"join them in <#{interaction.channel_id}> "
+    invite_text = f"Click here to join them: <#{interaction.channel_id}>"  # FIX B8
 
     if custom_message:
         invite_text += f"\n\n💬 Message from {interaction.user.display_name} :** {custom_message}**"
@@ -233,28 +233,28 @@ def flush_active_voice_time():
 
     save_voice_sessions(voiceTrack)
 
-def get_user_rank(userID, lbtype):
+def get_user_rank(userID, lbtype):  # FIX B3
     connection = sqlite3.connect('userTimeUsage.db')
     cursor = connection.cursor()
+    users_ahead = None  # always initialised
     if lbtype == 'all time':
         cursor.execute('''
             SELECT COUNT(*) FROM userTime 
             WHERE time > (SELECT time FROM userTime WHERE userID = ?)
         ''', (userID,))
-        users_ahead = cursor.fetchone()[0]
-    
-    if lbtype == 'daily':
+        row = cursor.fetchone()
+        users_ahead = row[0] if row else None
+    elif lbtype == 'daily':  # was bare `if` — ran both branches for 'all time'
         cursor.execute('''
             SELECT COUNT(*) FROM userTime 
             WHERE daily_time > (SELECT daily_time FROM userTime WHERE userID = ?)
         ''', (userID,))
-        users_ahead = cursor.fetchone()[0]
-        
-    if users_ahead is None: return None
-
-    connection.close()
-    user_rank = users_ahead + 1
-    return user_rank
+        row = cursor.fetchone()
+        users_ahead = row[0] if row else None
+    connection.close()  # moved before early return — was leaking connection
+    if users_ahead is None:
+        return None
+    return users_ahead + 1
 
 async def get_leaderboard_users(lbData, bot):
     users = []
@@ -279,7 +279,7 @@ async def Profile(interaction: discord.Interaction):
     lvl = level(interaction.user.id)
     solid_square = '\u25a0'
     hollow_square = '\u25a1'
-    pAch = int(lvl[2] / lvl[1] * 10)
+    pAch = min(10, int(lvl[2] / lvl[1] * 10))  # FIX B1: cap at 10
     
     desp = f'''```
 Username    = {interaction.user.name}
@@ -293,7 +293,7 @@ Server Rank = {get_user_rank(lbtype="all time", userID=interaction.user.id)}
         color=discord.Color.red(),
         description=desp
     )
-    profileEmbed.set_thumbnail(url=interaction.user.avatar)
+    profileEmbed.set_thumbnail(url=interaction.user.display_avatar.url)  # FIX B2: .avatar is None for default-avatar users
     profileEmbed.add_field(name="XP", value=f"{pAch*solid_square+((10-pAch)*hollow_square)}", inline=False)
     profileEmbed.add_field(name="Today Study Time", value=f"Total Time: {str(timedelta(seconds=int(getUserDailyTime(interaction.user.id))))}", inline=False)
     profileEmbed.add_field(name="Total Study Time", value=f"Total Time: {str(timedelta(seconds=int(getUserTime(interaction.user.id))))}", inline=False)
@@ -491,7 +491,7 @@ async def on_voice_state_update(member, before, after):
     is_now_tracking = (after.channel is not None) and (after.channel.id not in exChannels)
 
     # ── User left a tracked channel (or moved to an excluded one) ──
-    if was_tracking and (not is_now_tracking or (before.channel and before.channel.id != after.channel.id)):
+    if was_tracking and (not is_now_tracking or (before.channel is not None and after.channel is not None and before.channel.id != after.channel.id)):  # FIX B4
         joinTime = voiceTrack.pop(userID)
         leaveTime = datetime.now(timezone.utc)
         duration = (leaveTime - joinTime).total_seconds()
@@ -1138,7 +1138,7 @@ async def streak_img_lb(interaction: discord.Interaction):
         await interaction.followup.send(f"An error occurred: {str(e)}")
 MOTIVATIONAL_LINES = [
     "Every hour you put in today is a brick.\nYou might not see the building yet but it's going up.",
-    "Whether today was a 10/10 grind or barely getting through, you showed up.\nThat already puts you ahead of 99% peopple.",
+    "Whether today was a 10/10 grind or barely getting through, you showed up.\nThat already puts you ahead of 99% people.",
     "Consistency over intensity. Keep stacking the days.",
     "Small progress is still progress. You're building something real.",
     "The version of you from a month ago would be proud. Keep going.",
@@ -1275,10 +1275,12 @@ async def midnight_maintenance():
                         WHERE userID = ?
                     ''', (userID,))
 
-                for t in journal_tasks:
+                # FIX B6: journal tasks are persistent — never auto-reset completed.
+                # Daily tasks keep their names but have completed reset each night.
+                for t in daily_tasks:
                     t['completed'] = False
 
-                new_tasks_data = json.dumps({"journal": journal_tasks, "daily": []})
+                new_tasks_data = json.dumps({"journal": journal_tasks, "daily": daily_tasks})
                 task_cursor.execute("UPDATE userTasks SET tasks = ? WHERE userID = ?", (new_tasks_data, userID))
 
             except Exception as e:
@@ -1404,14 +1406,11 @@ async def on_message(message):
             except Exception:
                 pass
 
-        if not thanked_user and message.mentions:
+        if not thanked_user and message.mentions:  # FIX B5: removed dead fallback
             for user in message.mentions:
                 if user.id != message.author.id:
                     thanked_user = user
                     break
-                
-            if not thanked_user and message.mentions:
-                thanked_user = message.mentions[0]
 
         if thanked_user:
             try:
@@ -1687,6 +1686,3 @@ if __name__ == "__main__":
         bot.run(token)
     else:
         print("❌ ERROR: DISCORD_TOKEN not found in Environment Variables!")
-
-
-#
