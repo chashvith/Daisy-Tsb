@@ -1382,6 +1382,155 @@ async def post_daily_streak():
         print(f"Error generating daily streak: {e}")
 
 # ==========================================
+#  WELCOME DM  (fires when a member joins)
+# ==========================================
+@bot.event
+async def on_member_join(member: discord.Member):
+    """Send a rich welcome DM explaining the server's core features."""
+    if member.bot:
+        return
+
+    guild = member.guild
+
+    embed = discord.Embed(
+        title=f"👋 Welcome to {guild.name}!",
+        description=(
+            f"Hey {member.mention}, we're so glad you're here! 🎉\n\n"
+            "Here's a quick rundown of what makes our community special:"
+        ),
+        color=discord.Color.purple()
+    )
+
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+
+    embed.add_field(
+        name="📊 Voice Time Tracking",
+        value=(
+            "Every minute you spend in a study voice channel is automatically recorded. "
+            "No setup needed — just join a channel and we handle the rest. "
+            "Use `/profile` to see your personal stats at any time."
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="📈 Daily Stats & Reports",
+        value=(
+            "At the end of every day you'll receive a **personalised DM report** "
+            "showing exactly how long you studied, your streak, and how you rank "
+            "against the rest of the server."
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🏆 Leaderboards",
+        value=(
+            "Compete with the whole server on three leaderboards:\n"
+            "• **Daily** — who studied the most today?\n"
+            "• **Weekly** — stay consistent all week\n"
+            "• **All‑Time** — the hall of fame\n\n"
+            "Use `/leaderboard` or `/streak_leaderboard` to check the rankings!"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="✅ Advanced Task List",
+        value=(
+            "Stay on top of your goals with our built‑in task system:\n"
+            "• `/add_task` — add a **Daily** or **Journal** task\n"
+            "• `/complete` — mark tasks as done and build your streak 🔥\n"
+            "• `/tasks` — view everything on your plate right now"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🏷️ Subject Tags",
+        value=(
+            "Track time per subject with custom tags. "
+            "Add tags with `/add_tag`, then activate one before a session "
+            "to see exactly how many hours you've put into each course."
+        ),
+        inline=False
+    )
+
+    embed.set_footer(text=f"{guild.name} • Study hard, track harder 💪")
+
+    try:
+        await member.send(embed=embed)
+        print(f"✅ Welcome DM sent to {member.name}")
+    except discord.Forbidden:
+        print(f"⚠️ Could not DM {member.name} — DMs closed")
+
+
+# ==========================================
+#  GOODBYE DM  (fires when a member leaves)
+# ==========================================
+@bot.event
+async def on_member_remove(member: discord.Member):
+    """Send a 'give us another chance' DM when someone leaves the server."""
+    if member.bot:
+        return
+
+    guild = member.guild
+
+    embed = discord.Embed(
+        title="😢 We're sad to see you go…",
+        description=(
+            f"Hey **{member.name}**, it looks like you've left **{guild.name}**.\n\n"
+            "We hope your time with us was worthwhile — but if anything felt off, "
+            "we'd genuinely love a second chance. 🙏"
+        ),
+        color=discord.Color.orange()
+    )
+
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+
+    embed.add_field(
+        name="🔄 What you'll be missing",
+        value=(
+            "• **Automatic voice‑time tracking** — every study session logged\n"
+            "• **Nightly personalised DM reports** with your stats & streak\n"
+            "• **Daily, Weekly & All‑Time leaderboards** to keep you motivated\n"
+            "• **Task lists** to plan your day and track your progress\n"
+            "• A community of people who actually show up 💪"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="💬 Got feedback?",
+        value=(
+            "If something made you leave — a bad experience, a missing feature, "
+            "or anything else — we want to hear it. Your feedback shapes the server. "
+            "Just reply to this message and a mod will reach out."
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🚪 Come back anytime",
+        value=(
+            "The door is always open. Rejoin whenever you're ready and "
+            "your stats will be right where you left them."
+        ),
+        inline=False
+    )
+
+    embed.set_footer(text=f"{guild.name} • We'll keep the light on 🕯️")
+
+    try:
+        await member.send(embed=embed)
+        print(f"✅ Goodbye DM sent to {member.name}")
+    except discord.Forbidden:
+        print(f"⚠️ Could not DM {member.name} — DMs closed")
+
+
+# ==========================================
 #  MESSAGE HANDLER (REP SYSTEM)
 # ==========================================
 @bot.event
